@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 import logging
-import google.generativeai as genai
+from gemini_analyzer import GeminiAnalyzer
 from config import (
     GEMINI_API_KEY,
     LOG_LEVEL,
@@ -77,6 +77,7 @@ class FigmaDFS:
             "X-Figma-Token": access_token,
             "Content-Type": "application/json",
         }
+        self.gemini_analyzer = GeminiAnalyzer()
 
     def get_file(self, file_key: str) -> Dict[str, Any]:
         """
@@ -257,242 +258,28 @@ class FigmaDFS:
     def _extract_base_node_id(self, node_id: str) -> str:
         """
         Extract the base node ID from a Figma node ID string.
-        Figma node IDs can include component and variant information separated by semicolons.
-        This method returns only the base node ID (before the first semicolon).
+        Figma node IDs can include component and variant information separated by semicolons,
+        and instance nodes may have an "I" prefix.
+        This method returns only the base node ID (before the first semicolon and without "I" prefix).
 
         Args:
-            node_id: Full node ID string (e.g., "290:7308;216:4169")
+            node_id: Full node ID string (e.g., "290:7308;216:4169" or "I5:159")
 
         Returns:
-            Base node ID string (e.g., "290:7308")
+            Base node ID string (e.g., "290:7308" or "5:159")
         """
+        # Remove "I" prefix if present
+        if node_id.startswith("I"):
+            node_id = node_id[1:]
+
+        # Remove semicolon-separated parts if present
         return node_id.split(";")[0] if ";" in node_id else node_id
 
-    def identify_text_inputs_with_gemini(
-        self, nodes: List[Dict[str, Any]]
-    ) -> Dict[str, Dict[str, str]]:
-        """
-        Identify text input elements using Gemini AI analysis ONLY
-
-        Args:
-            nodes: List of dictionaries with node_id, type, x, y properties and optional data
-
-        Returns:
-            Dictionary with node_id as keys and {"tag": "input"} as values
-        """
-        logger.info(f"Starting Gemini text input identification for {len(nodes)} nodes")
-
-        # Configure Gemini
-        logger.debug("Configuring Gemini API...")
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        logger.debug("Gemini API configured successfully")
-
-        # Prepare the prompt for Gemini
-        logger.info("Creating Gemini prompt...")
-        prompt = self._create_gemini_input_detection_prompt(nodes)
-        logger.debug(f"Gemini prompt created (length: {len(prompt)} characters)")
-        logger.debug(f"Prompt preview: {prompt[:500]}...")
-
-        # Write the full prompt to a file
-        try:
-            with open("gemini_prompt.txt", "w", encoding="utf-8") as f:
-                f.write(prompt)
-            logger.info("Full Gemini prompt written to gemini_prompt.txt")
-        except Exception as e:
-            logger.error(f"Error writing prompt to file: {e}")
-
-        try:
-            # Send request to Gemini
-            logger.info("Sending request to Gemini API...")
-            logger.debug("Making Gemini API call...")
-            response = model.generate_content(prompt)
-            logger.info("Gemini API response received successfully")
-            logger.debug(f"Gemini response length: {len(response.text)} characters")
-            logger.debug(f"Gemini response preview: {response.text[:500]}...")
-
-            # Parse Gemini's response
-            logger.info("Parsing Gemini response...")
-            result = self._parse_gemini_response(response.text)
-            logger.info(
-                f"Successfully parsed {len(result)} text input nodes from Gemini response"
-            )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error using Gemini for text input detection: {e}")
-            logger.info("Gemini detection failed - returning empty result")
-            # Return empty result instead of falling back to local detection
-            return {}
-
-    def _create_gemini_input_detection_prompt(self, nodes: List[Dict[str, Any]]) -> str:
-        """
-        Create a concise prompt for Gemini to detect main text input elements
-
-        Args:
-            nodes: List of node dictionaries with complete structure
-
-        Returns:
-            Formatted prompt string for Gemini
-        """
-        logger.info(f"Creating concise Gemini prompt for {len(nodes)} nodes...")
-
-        prompt = """You are a UI analyst. Identify main text input elements from Figma nodes.
-
-## Detection Criteria:
-- Main input containers (FRAME, RECTANGLE, INSTANCE) with input functionality
-- Named like "Search Bar", "Input Field", "Text Input", "Search"
-- MUST be the main input container, not child elements
-- Exclude: icons, buttons, labels, help text, placeholder text, backgrounds
-- Exclude: any node that is a child of another input container
-
-## Output Format:
-```json
-{
-  "<node_id>": {"tag": "input"},
-  "<node_id>": {"tag": "input"}
-}
-```
-
-## Nodes to Analyze:"""
-
-        # Add concise node information to the prompt
-        logger.debug("Adding concise node data to prompt...")
-        for i, node in enumerate(nodes, 1):
-            logger.debug(
-                f"Adding node {i+1}/{len(nodes)}: {node.get('node_id', 'N/A')} - {node.get('name', 'N/A')}"
-            )
-
-            # Only include essential information for text input detection
-            node_id = node.get("node_id", "N/A")
-            node_type = node.get("type", "N/A")
-            node_name = node.get("name", "N/A")
-            parent_id = node.get("parent_id", None)
-
-            # Skip nodes that are clearly not input candidates
-            if node_type in ["TEXT", "VECTOR", "LINE", "ELLIPSE", "STAR"]:
-                continue
-
-            # Skip child elements that are clearly not main inputs (but allow main input containers)
-            if parent_id and any(
-                skip_name in node_name.lower()
-                for skip_name in [
-                    "icon",
-                    "label",
-                    "help",
-                    "placeholder",
-                    "button",
-                    "inner",
-                    "text",
-                    "base",
-                    "fill",
-                ]
-            ):
-                continue
-
-            # Skip nodes that are children of other input containers (but allow the main containers themselves)
-            if (
-                parent_id
-                and parent_id != "1:13180"
-                and any(
-                    parent_name in node_name.lower()
-                    for parent_name in ["input", "search", "field"]
-                )
-            ):
-                continue
-
-            prompt += f"\n{node_id}|{node_type}|{node_name}"
-
-            # Add only critical data for input detection
-            if "data" in node and node["data"]:
-                data = node["data"]
-
-                # Include corner radius for input-like styling
-                if "cornerRadius" in data and data.get("cornerRadius", 0) > 0:
-                    prompt += f"|r{data.get('cornerRadius')}"
-
-                # Include text content only for nodes that might be inputs
-                if (
-                    node_type in ["FRAME", "RECTANGLE", "INSTANCE"]
-                    and "characters" in data
-                ):
-                    chars = data.get("characters", "").strip()
-                    if chars and len(chars) < 50:  # Only short text
-                        prompt += f"|t{chars}"
-
-        prompt += """
-Analyze the nodes above and return your JSON response:"""
-
-        logger.info(
-            f"Concise Gemini prompt created successfully (length: {len(prompt)} characters)"
-        )
-        return prompt
-
-    def _parse_gemini_response(self, response_text: str) -> Dict[str, Dict[str, str]]:
-        """
-        Parse Gemini's response and extract text input nodes
-
-        Args:
-            response_text: Raw response from Gemini
-
-        Returns:
-            Dictionary with node_id as keys and {"tag": "input"} as values
-        """
-        logger.info("Starting to parse Gemini response...")
-        logger.debug(f"Response text length: {len(response_text)} characters")
-
-        try:
-            # Extract JSON from response (handle markdown code blocks)
-            logger.debug("Extracting JSON from Gemini response...")
-
-            if "```json" in response_text:
-                logger.debug("Found ```json code block, extracting...")
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                json_str = response_text[json_start:json_end].strip()
-                logger.debug(
-                    f"Extracted JSON from ```json block (length: {len(json_str)})"
-                )
-            elif "```" in response_text:
-                logger.debug("Found ``` code block, extracting...")
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                json_str = response_text[json_start:json_end].strip()
-                logger.debug(f"Extracted JSON from ``` block (length: {len(json_str)})")
-            else:
-                logger.debug("No code blocks found, looking for JSON object...")
-                # Try to find JSON object in the response
-                start_brace = response_text.find("{")
-                end_brace = response_text.rfind("}")
-                if start_brace != -1 and end_brace != -1:
-                    json_str = response_text[start_brace : end_brace + 1]
-                    logger.debug(f"Extracted JSON object (length: {len(json_str)})")
-                else:
-                    logger.error("No JSON found in response")
-                    raise ValueError("No JSON found in response")
-
-            logger.debug(f"Extracted JSON string: {json_str[:200]}...")
-
-            # Parse the JSON
-            logger.debug("Parsing JSON string...")
-            input_nodes_dict = json.loads(json_str)
-            logger.info(
-                f"Successfully parsed JSON, found {len(input_nodes_dict)} text input nodes"
-            )
-
-            return input_nodes_dict
-
-        except Exception as e:
-            logger.error(f"Error parsing Gemini response: {e}")
-            logger.error(f"Raw response: {response_text}")
-            return {}
-
-    def get_text_input_nodes_from_figma_with_gemini(
+    async def get_text_input_nodes_from_figma_with_gemini(
         self, file_key: str, node_ids: List[str]
     ) -> Dict[str, Dict[str, str]]:
         """
-        Get text input nodes from Figma API and identify them using Gemini ONLY
+        Get text input nodes from Figma API and identify them using Gemini
 
         Args:
             file_key: Figma file key
@@ -562,7 +349,7 @@ Analyze the nodes above and return your JSON response:"""
 
         # Use Gemini to analyze the nodes
         logger.info("Starting Gemini analysis...")
-        result = self.identify_text_inputs_with_gemini(nodes_with_data)
+        result = await self.gemini_analyzer.analyze_nodes(nodes_with_data, "text_input")
         logger.info(
             f"Gemini analysis completed. Found {len(result)} text input structures"
         )
@@ -731,7 +518,284 @@ Analyze the nodes above and return your JSON response:"""
         self, file_key: str, node_id: str, max_depth: Optional[int] = None
     ) -> Dict[str, Dict[str, str]]:
         """
-        Get all nodes with their structure starting from a specific node ID and analyze for text inputs with Gemini ONLY
+        Get all nodes with their structure starting from a specific node ID and analyze for text inputs with Gemini.
+
+        Args:
+            file_key: Figma file key
+            node_id: Starting node ID
+            max_depth: Maximum depth to traverse (None for unlimited)
+
+        Returns:
+            Dictionary with node_id as keys and {"tag": "input"} as values
+        """
+        import asyncio
+
+        return asyncio.run(
+            self.get_all_text_inputs_from_figma_with_gemini(
+                file_key, node_id, max_depth
+            )
+        )
+
+    async def get_all_inputs_buttons_and_links_from_figma_with_gemini(
+        self, file_key: str, node_id: str, max_depth: Optional[int] = None
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Get all nodes with their structure starting from a specific node ID and analyze for text inputs, buttons, and links with Gemini.
+
+        Args:
+            file_key: Figma file key
+            node_id: Starting node ID
+            max_depth: Maximum depth to traverse (None for unlimited)
+
+        Returns:
+            Dictionary with node_id as keys and {"tag": "input"}, {"tag": "button"}, or {"tag": "link"} as values
+        """
+        logger.info(
+            f"Starting comprehensive input, button, and link analysis with Gemini from node ID: {node_id}"
+        )
+        logger.info(f"File key: {file_key}")
+        logger.info(f"Max depth: {max_depth}")
+
+        # Get all nodes using DFS
+        all_nodes = self.depth_first_search_from_node_id(
+            file_key, node_id, max_depth=max_depth
+        )
+        logger.info(f"Found {len(all_nodes)} total nodes in the structure")
+
+        # Convert FigmaNode objects to dictionaries with full structure
+        nodes_with_data = []
+        logger.info("Converting nodes to structured data for Gemini analysis...")
+
+        for i, node in enumerate(all_nodes, 1):
+            try:
+                logger.debug(
+                    f"Processing node {i}/{len(all_nodes)}: {node.name} (ID: {node.id})"
+                )
+
+                # Extract position information from the node's data
+                absolute_bounding_box = node.data.get("absoluteBoundingBox", {})
+                x = absolute_bounding_box.get("x", 0)
+                y = absolute_bounding_box.get("y", 0)
+                width = absolute_bounding_box.get("width", 0)
+                height = absolute_bounding_box.get("height", 0)
+                is_wider_than_tall = width > height if width and height else False
+
+                # Parent info
+                parent_name = None
+                parent_type = None
+                if node.parent_id:
+                    parent = next(
+                        (n for n in all_nodes if n.id == node.parent_id), None
+                    )
+                    if parent:
+                        parent_name = parent.name
+                        parent_type = parent.type
+
+                # Children info
+                child_names = []
+                child_types = []
+                if node.children:
+                    for child in node.children:
+                        child_names.append(child.name)
+                        child_types.append(child.type)
+
+                # Sibling info
+                sibling_names = []
+                sibling_types = []
+                if node.parent_id:
+                    siblings = [
+                        n
+                        for n in all_nodes
+                        if n.parent_id == node.parent_id and n.id != node.id
+                    ]
+                    for sib in siblings:
+                        sibling_names.append(sib.name)
+                        sibling_types.append(sib.type)
+
+                # Detect left and right icon info among children
+                has_left_icon = False
+                left_icon_name = None
+                has_right_icon = False
+                right_icon_name = None
+                for child in node.children:
+                    child_name = getattr(child, "name", "").lower()
+                    if (
+                        "left" in child_name
+                        or "icon left" in child_name
+                        or "left icon" in child_name
+                    ):
+                        has_left_icon = True
+                        left_icon_name = getattr(child, "name", None)
+                    if (
+                        "right" in child_name
+                        or "icon right" in child_name
+                        or "right icon" in child_name
+                    ):
+                        has_right_icon = True
+                        right_icon_name = getattr(child, "name", None)
+                    # Also check for common dropdown icon names for right icon
+                    if any(
+                        keyword in child_name
+                        for keyword in [
+                            "arrow-down",
+                            "chevron-down",
+                            "dropdown",
+                            "ep:arrow-down",
+                        ]
+                    ):
+                        has_right_icon = True
+                        right_icon_name = getattr(child, "name", None)
+
+                # Text content
+                text_content = None
+                if (
+                    node.type in ["FRAME", "RECTANGLE", "INSTANCE"]
+                    and "characters" in node.data
+                ):
+                    chars = node.data.get("characters", "").strip()
+                    if chars:
+                        text_content = chars
+
+                # Create comprehensive node dictionary using existing data
+                node_dict = {
+                    "node_id": self._extract_base_node_id(node.id),
+                    "type": node.type,
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                    "is_wider_than_tall": is_wider_than_tall,
+                    "name": node.name,
+                    "data": node.data,
+                    "parent_id": (
+                        self._extract_base_node_id(node.parent_id)
+                        if node.parent_id
+                        else None
+                    ),
+                    "parent_name": parent_name,
+                    "parent_type": parent_type,
+                    "child_names": child_names,
+                    "child_types": child_types,
+                    "sibling_names": sibling_names,
+                    "sibling_types": sibling_types,
+                    "has_left_icon": has_left_icon,
+                    "left_icon_name": left_icon_name,
+                    "has_right_icon": has_right_icon,
+                    "right_icon_name": right_icon_name,
+                    "text_content": text_content,
+                }
+                nodes_with_data.append(node_dict)
+                logger.debug(
+                    f"Node {node.id} processed successfully: {node_dict['name']} ({node_dict['type']})"
+                )
+
+            except Exception as e:
+                logger.error(f"Error processing node {node.id}: {e}")
+                continue
+
+        logger.info(
+            f"Successfully processed {len(nodes_with_data)} nodes out of {len(all_nodes)} found"
+        )
+        logger.info(
+            "Sending all nodes to Gemini for input, button, and link analysis..."
+        )
+
+        # Use Gemini to analyze all nodes for inputs, buttons, and links asynchronously
+        detection_types = ["text_input", "button", "link"]
+        result = await self.gemini_analyzer.analyze_multiple_types(
+            nodes_with_data, detection_types
+        )
+
+        logger.info(
+            f"Gemini analysis completed. Found {len(result)} unique nodes with various detection types."
+        )
+        return result
+
+    async def get_all_inputs_and_buttons_from_figma_with_gemini(
+        self, file_key: str, node_id: str, max_depth: Optional[int] = None
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Get all nodes with their structure starting from a specific node ID and analyze for both text inputs and buttons with Gemini.
+
+        Args:
+            file_key: Figma file key
+            node_id: Starting node ID
+            max_depth: Maximum depth to traverse (None for unlimited)
+
+        Returns:
+            Dictionary with node_id as keys and {"tag": "input"} or {"tag": "button"} as values
+        """
+        logger.info(
+            f"Starting comprehensive input and button analysis with Gemini from node ID: {node_id}"
+        )
+        logger.info(f"File key: {file_key}")
+        logger.info(f"Max depth: {max_depth}")
+
+        # Get all nodes using DFS
+        all_nodes = self.depth_first_search_from_node_id(
+            file_key, node_id, max_depth=max_depth
+        )
+        logger.info(f"Found {len(all_nodes)} total nodes in the structure")
+
+        # Convert FigmaNode objects to dictionaries with full structure
+        nodes_with_data = []
+        logger.info("Converting nodes to structured data for Gemini analysis...")
+
+        for i, node in enumerate(all_nodes, 1):
+            try:
+                logger.debug(
+                    f"Processing node {i}/{len(all_nodes)}: {node.name} (ID: {node.id})"
+                )
+
+                # Extract position information from the node's data
+                absolute_bounding_box = node.data.get("absoluteBoundingBox", {})
+                x = absolute_bounding_box.get("x", 0)
+                y = absolute_bounding_box.get("y", 0)
+
+                # Create comprehensive node dictionary using existing data
+                node_dict = {
+                    "node_id": self._extract_base_node_id(node.id),
+                    "type": node.type,
+                    "x": x,
+                    "y": y,
+                    "name": node.name,
+                    "data": node.data,
+                    "parent_id": (
+                        self._extract_base_node_id(node.parent_id)
+                        if node.parent_id
+                        else None
+                    ),
+                }
+                nodes_with_data.append(node_dict)
+                logger.debug(
+                    f"Node {node.id} processed successfully: {node_dict['name']} ({node_dict['type']})"
+                )
+
+            except Exception as e:
+                logger.error(f"Error processing node {node.id}: {e}")
+                continue
+
+        logger.info(
+            f"Successfully processed {len(nodes_with_data)} nodes out of {len(all_nodes)} found"
+        )
+        logger.info("Sending all nodes to Gemini for input and button analysis...")
+
+        # Use Gemini to analyze all nodes for both inputs and buttons asynchronously
+        detection_types = ["text_input", "button"]
+        result = await self.gemini_analyzer.analyze_multiple_types(
+            nodes_with_data, detection_types
+        )
+
+        logger.info(
+            f"Gemini analysis completed. Found {len(result)} unique nodes with input and button detection."
+        )
+        return result
+
+    async def get_all_text_inputs_from_figma_with_gemini(
+        self, file_key: str, node_id: str, max_depth: Optional[int] = None
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Get all nodes with their structure starting from a specific node ID and analyze for text inputs with Gemini.
 
         Args:
             file_key: Figma file key
@@ -796,8 +860,9 @@ Analyze the nodes above and return your JSON response:"""
         )
         logger.info("Sending all nodes to Gemini for text input analysis...")
 
-        # Use Gemini to analyze all nodes
-        result = self.identify_text_inputs_with_gemini(nodes_with_data)
+        # Use Gemini to analyze all nodes for text inputs asynchronously
+        result = await self.gemini_analyzer.analyze_nodes(nodes_with_data, "text_input")
+
         logger.info(
             f"Gemini analysis completed. Found {len(result)} text input structures"
         )
