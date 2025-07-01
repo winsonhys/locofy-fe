@@ -416,11 +416,14 @@ ORIGINAL ANALYSIS RESULTS:
 
 FILE KEY: {file_key}
 
-YOUR TASK:
-1. Review each classification (link, button, input, select) for the nodes above
-2. If you need more information about a specific node, you can query the Figma API using this format:
+WORKFLOW INSTRUCTIONS:
+1. FIRST: Query the Figma API for detailed information about ALL nodes using this format:
    QUERY_API: {{"node_id": "node_id_here"}}
-3. For every node, assign the most plausible tag (input, button, select, or link) and provide your verification with a confidence score (0.0-1.0), even if confidence is low. Do not exclude any node or use 'none'.
+   You can query multiple nodes at once by separating node IDs with commas.
+2. SECOND: After receiving the API data, analyze each node's properties, name, text content, and visual characteristics
+3. THIRD: Provide your verification with confidence scores based on the actual Figma data
+
+CRITICAL: You MUST query the Figma API FIRST before providing any verification results. Do not provide confidence scores without examining the actual node data.
 
 DETECTION GUIDELINES:
 - BUTTON: Look for button_like proportions, button_text patterns, button_name in component name, primary/secondary button styles, interactions with CLICK triggers
@@ -463,16 +466,29 @@ API responses use enhanced compact format: {{"n": {{"node_id": [name, type, comp
   * primary_align: primary axis alignment
   * counter_align: counter axis alignment
 
-CRITICAL: You MUST provide a complete JSON response. Do not return empty responses or partial responses.
+RESPONSE FORMAT (provide this JSON structure after analyzing API data):
+{{
+  "verifications": [
+    {{
+      "node_id": "node_id",
+      "classification": "input|button|select|link",
+      "confidence": 0.95,
+      "notes": "verification notes based on actual Figma data"
+    }}
+  ]
+}}
 
 IMPORTANT CLASSIFICATION RULES:
 - Only classify elements as one of the 4 types: "input", "button", "select", "link"
-- For every node, assign the most plausible tag and a confidence score, even if confidence is low
+- For every node, assign the most plausible tag and a confidence score based on actual Figma data
 - Do not use "none" as a classification and do not exclude any node
 - Focus on elements that are clearly interactive UI components
 - Exclude decorative elements, icons that are part of other components, and non-interactive elements
+- Base your confidence scores on the actual properties, names, and characteristics from the Figma API data
 
-Start by reviewing the results. If you need more details about specific nodes, use QUERY_API format. When you're ready to provide verification, respond with ONLY the JSON object above."""
+STEP 1: Query the Figma API for all nodes to get detailed information.
+STEP 2: Analyze the API response data for each node.
+STEP 3: Provide verification results with confidence scores based on the actual data."""
 
         return prompt
 
@@ -686,15 +702,37 @@ Start by reviewing the results. If you need more details about specific nodes, u
 
                         # Extract verification results
                         verifications = verification_data.get("verifications", {})
-                        for node_id, verification in verifications.items():
-                            verified_results[node_id] = {
-                                "tag": verification.get("verified_tag", "none"),
-                                "confidence": verification.get("confidence", 0.5),
-                                "notes": verification.get("notes", ""),
-                            }
-                            confidence_scores[node_id] = verification.get(
-                                "confidence", 0.5
-                            )
+
+                        # Handle both list and dictionary formats
+                        if isinstance(verifications, list):
+                            # Convert list format to dictionary format
+                            for verification in verifications:
+                                node_id = verification.get("node_id")
+                                if node_id:
+                                    verified_results[node_id] = {
+                                        "tag": verification.get(
+                                            "classification",
+                                            verification.get("verified_tag", "none"),
+                                        ),
+                                        "confidence": verification.get(
+                                            "confidence", 0.5
+                                        ),
+                                        "notes": verification.get("notes", ""),
+                                    }
+                                    confidence_scores[node_id] = verification.get(
+                                        "confidence", 0.5
+                                    )
+                        else:
+                            # Handle dictionary format
+                            for node_id, verification in verifications.items():
+                                verified_results[node_id] = {
+                                    "tag": verification.get("verified_tag", "none"),
+                                    "confidence": verification.get("confidence", 0.5),
+                                    "notes": verification.get("notes", ""),
+                                }
+                                confidence_scores[node_id] = verification.get(
+                                    "confidence", 0.5
+                                )
 
                         # Extract overall confidence
                         overall_confidence = verification_data.get(
@@ -1336,11 +1374,14 @@ CHUNK {chunk_number} ANALYSIS RESULTS:
 
 FILE KEY: {file_key}
 
-YOUR TASK:
-1. Review each classification (link, button, input, select) for the {len(chunk_results)} nodes above
-2. If you need more information about a specific node, you can query the Figma API using this format:
+WORKFLOW INSTRUCTIONS:
+1. FIRST: Query the Figma API for detailed information about ALL {len(chunk_results)} nodes using this format:
    QUERY_API: {{"node_id": "node_id_here"}}
-3. For every node, assign the most plausible tag (input, button, select, or link) and provide your verification with a confidence score (0.0-1.0), even if confidence is low. Do not exclude any node or use 'none'.
+   You can query multiple nodes at once by separating node IDs with commas.
+2. SECOND: After receiving the API data, analyze each node's properties, name, text content, and visual characteristics
+3. THIRD: Provide your verification with confidence scores based on the actual Figma data
+
+CRITICAL: You MUST query the Figma API FIRST before providing any verification results. Do not provide confidence scores without examining the actual node data.
 
 DETECTION GUIDELINES:
 - BUTTON: Look for button_like proportions, button_text patterns, button_name in component name, primary/secondary button styles, interactions with CLICK triggers
@@ -1364,32 +1405,31 @@ API responses use enhanced compact format: {{"n": {{"node_id": [name, type, comp
 - children: {{"c": count, "t": [types]}} (object, always present)
 - ui_hints: UI detection hints (object, empty {{}} if none)
 
-IMPORTANT: You must respond with valid JSON only. Do not include any text before or after the JSON.
-
-RESPONSE FORMAT (respond with this exact JSON structure):
+RESPONSE FORMAT (provide this JSON structure after analyzing API data):
 {{
   "verifications": {{
     "node_id": {{
       "original_tag": "original_tag",
       "verified_tag": "verified_tag", 
       "confidence": 0.95,
-      "notes": "verification notes"
+      "notes": "verification notes based on actual Figma data"
     }}
   }},
   "api_queries": ["list of node_ids that were queried"],
   "overall_confidence": 0.92
 }}
 
-CRITICAL: You MUST provide a complete JSON response. Do not return empty responses or partial responses.
-
 IMPORTANT CLASSIFICATION RULES:
 - Only classify elements as one of the 4 types: "input", "button", "select", "link"
-- For every node, assign the most plausible tag and a confidence score, even if confidence is low
+- For every node, assign the most plausible tag and a confidence score based on actual Figma data
 - Do not use "none" as a classification and do not exclude any node
 - Focus on elements that are clearly interactive UI components
 - Exclude decorative elements, icons that are part of other components, and non-interactive elements
+- Base your confidence scores on the actual properties, names, and characteristics from the Figma API data
 
-Start by reviewing the results. If you need more details about specific nodes, use QUERY_API format. When you're ready to provide verification, respond with ONLY the JSON object above."""
+STEP 1: Query the Figma API for all {len(chunk_results)} nodes to get detailed information.
+STEP 2: Analyze the API response data for each node.
+STEP 3: Provide verification results with confidence scores based on the actual data."""
 
         return prompt
 
@@ -1495,13 +1535,31 @@ Start by reviewing the results. If you need more details about specific nodes, u
 
             # Extract verification results
             verifications = verification_data.get("verifications", {})
-            for node_id, verification in verifications.items():
-                verified_results[node_id] = {
-                    "tag": verification.get("verified_tag", "none"),
-                    "confidence": verification.get("confidence", 0.5),
-                    "notes": verification.get("notes", ""),
-                }
-                confidence_scores[node_id] = verification.get("confidence", 0.5)
+
+            # Handle both list and dictionary formats
+            if isinstance(verifications, list):
+                # Convert list format to dictionary format
+                for verification in verifications:
+                    node_id = verification.get("node_id")
+                    if node_id:
+                        verified_results[node_id] = {
+                            "tag": verification.get(
+                                "classification",
+                                verification.get("verified_tag", "none"),
+                            ),
+                            "confidence": verification.get("confidence", 0.5),
+                            "notes": verification.get("notes", ""),
+                        }
+                        confidence_scores[node_id] = verification.get("confidence", 0.5)
+            else:
+                # Handle dictionary format
+                for node_id, verification in verifications.items():
+                    verified_results[node_id] = {
+                        "tag": verification.get("verified_tag", "none"),
+                        "confidence": verification.get("confidence", 0.5),
+                        "notes": verification.get("notes", ""),
+                    }
+                    confidence_scores[node_id] = verification.get("confidence", 0.5)
 
             return verified_results, confidence_scores
 
@@ -1546,7 +1604,7 @@ async def main():
             FIGMA_FILE_KEY,
             START_NODE_ID,
             max_depth=None,  # Use smaller depth for faster testing
-            use_chunked_verification=True,  # Use chunked verification (default)
+            use_chunked_verification=False,  # Use chunked verification (default)
             chunk_size=8,  # Process 8 nodes at a time
         )
 
@@ -1629,48 +1687,6 @@ async def main():
             if len(final_results) > 3:
                 print("  ...")
             print("}")
-
-            # Show usage examples
-            print()
-            print("💡 USAGE EXAMPLES:")
-            print("  # Simple usage - just get final results")
-            print(
-                "  final_results = await workflow.run_and_get_final_results(file_key, node_id)"
-            )
-            print()
-            print(
-                "  # Detailed usage - get both final results and verification details"
-            )
-            print(
-                "  final_results, verification_result = await workflow.run_with_detailed_results(file_key, node_id)"
-            )
-            print()
-            print("  # Chunked verification (default)")
-            print(
-                "  final_results, verification_result = await workflow.run_with_detailed_results("
-            )
-            print(
-                "      file_key, node_id, use_chunked_verification=True, chunk_size=8)"
-            )
-            print()
-            print("  # Non-chunked verification")
-            print(
-                "  final_results, verification_result = await workflow.run_with_detailed_results("
-            )
-            print("      file_key, node_id, use_chunked_verification=False)")
-            print()
-            print("  # Custom chunk size")
-            print(
-                "  final_results, verification_result = await workflow.run_with_detailed_results("
-            )
-            print(
-                "      file_key, node_id, use_chunked_verification=True, chunk_size=12)"
-            )
-            print()
-            print("  # Access confidence scores: verification_result.confidence_scores")
-            print(
-                "  # Access verification notes: verification_result.verification_notes"
-            )
 
         else:
             print("❌ No results obtained")
