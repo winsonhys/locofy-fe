@@ -703,6 +703,170 @@ class FigmaDFS:
         )
         return result
 
+    async def get_all_elements_from_figma_with_gemini_combined(
+        self, file_key: str, node_id: str, max_depth: Optional[int] = None
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Get all nodes with their structure starting from a specific node ID and analyze for all element types using a single combined Gemini call.
+
+        Args:
+            file_key: Figma file key
+            node_id: Starting node ID
+            max_depth: Maximum depth to traverse (None for unlimited)
+
+        Returns:
+            Dictionary with node_id as keys and {"tag": "input"}, {"tag": "button"}, {"tag": "select"}, or {"tag": "link"} as values
+        """
+        logger.info(
+            f"Starting combined element analysis with Gemini from node ID: {node_id}"
+        )
+        logger.info(f"File key: {file_key}")
+        logger.info(f"Max depth: {max_depth}")
+
+        # Get all nodes using DFS
+        all_nodes = self.depth_first_search_from_node_id(
+            file_key, node_id, max_depth=max_depth
+        )
+        logger.info(f"Found {len(all_nodes)} total nodes in the structure")
+
+        # Convert FigmaNode objects to dictionaries with full structure
+        nodes_with_data = []
+        logger.info(
+            "Converting nodes to structured data for combined Gemini analysis..."
+        )
+
+        for i, node in enumerate(all_nodes, 1):
+            try:
+                logger.debug(
+                    f"Processing node {i}/{len(all_nodes)}: {node.name} (ID: {node.id})"
+                )
+
+                # Extract position information from the node's data
+                absolute_bounding_box = node.data.get("absoluteBoundingBox", {})
+                x = absolute_bounding_box.get("x", 0)
+                y = absolute_bounding_box.get("y", 0)
+                width = absolute_bounding_box.get("width", 0)
+                height = absolute_bounding_box.get("height", 0)
+                is_wider_than_tall = width > height if width and height else False
+
+                # Parent info
+                parent_name = None
+                parent_type = None
+                if node.parent_id:
+                    parent = next(
+                        (n for n in all_nodes if n.id == node.parent_id), None
+                    )
+                    if parent:
+                        parent_name = parent.name
+                        parent_type = parent.type
+
+                # Safely handle None for children and siblings
+                children = node.children if node.children is not None else []
+                sibling_names = []
+                sibling_types = []
+                if node.parent_id:
+                    siblings = [
+                        n
+                        for n in all_nodes
+                        if n.parent_id == node.parent_id and n.id != node.id
+                    ]
+                    for sib in siblings:
+                        sibling_names.append(sib.name)
+                        sibling_types.append(sib.type)
+
+                # Detect left and right icon info among children
+                has_left_icon = False
+                left_icon_name = None
+                has_right_icon = False
+                right_icon_name = None
+                for child in children:
+                    child_name = getattr(child, "name", "").lower()
+                    if (
+                        "left" in child_name
+                        or "icon left" in child_name
+                        or "left icon" in child_name
+                    ):
+                        has_left_icon = True
+                        left_icon_name = getattr(child, "name", None)
+                    if (
+                        "right" in child_name
+                        or "icon right" in child_name
+                        or "right icon" in child_name
+                    ):
+                        has_right_icon = True
+                        right_icon_name = getattr(child, "name", None)
+                    if any(
+                        keyword in child_name
+                        for keyword in [
+                            "arrow-down",
+                            "chevron-down",
+                            "dropdown",
+                            "ep:arrow-down",
+                        ]
+                    ):
+                        has_right_icon = True
+                        right_icon_name = getattr(child, "name", None)
+
+                # Text content
+                text_content = None
+                if (
+                    node.type in ["FRAME", "RECTANGLE", "INSTANCE"]
+                    and "characters" in node.data
+                ):
+                    chars = node.data.get("characters", "").strip()
+                    if chars:
+                        text_content = chars
+
+                # Create comprehensive node dictionary using existing data
+                node_dict = {
+                    "node_id": self._extract_base_node_id(node.id),
+                    "type": node.type,
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                    "is_wider_than_tall": is_wider_than_tall,
+                    "name": node.name,
+                    "data": node.data,
+                    "parent_id": (
+                        self._extract_base_node_id(node.parent_id)
+                        if node.parent_id
+                        else None
+                    ),
+                    "parent_name": parent_name,
+                    "parent_type": parent_type,
+                    "child_names": [child.name for child in children],
+                    "child_types": [child.type for child in children],
+                    "sibling_names": sibling_names,
+                    "sibling_types": sibling_types,
+                    "has_left_icon": has_left_icon,
+                    "left_icon_name": left_icon_name,
+                    "has_right_icon": has_right_icon,
+                    "right_icon_name": right_icon_name,
+                    "text_content": text_content,
+                }
+                nodes_with_data.append(node_dict)
+                logger.debug(
+                    f"Node {node.id} processed successfully: {node_dict['name']} ({node_dict['type']})"
+                )
+
+            except Exception as e:
+                logger.error(f"Error processing node {node.id}: {e}")
+                continue
+
+        logger.info(
+            f"Successfully processed {len(nodes_with_data)} nodes out of {len(all_nodes)} found"
+        )
+        logger.info("Sending all nodes to Gemini for combined element analysis...")
+
+        # Use Gemini to analyze all nodes with a single combined call
+        result = await self.gemini_analyzer.analyze_nodes_combined(nodes_with_data)
+
+        logger.info(
+            f"Combined Gemini analysis completed. Found {len(result)} unique nodes with various element types."
+        )
+        return result
+
     async def get_all_inputs_and_buttons_from_figma_with_gemini(
         self, file_key: str, node_id: str, max_depth: Optional[int] = None
     ) -> Dict[str, Dict[str, str]]:

@@ -10,11 +10,12 @@ import asyncio
 import aiohttp
 import google.generativeai as genai
 from typing import Dict, List, Any, Optional
-from config import GEMINI_API_KEY
+from config import GEMINI_API_KEY, GEMINI_MODEL_NAME
 from input_detection_prompts import (
     InputDetectionPromptCreator,
     ButtonDetectionPromptCreator,
     LinkDetectionPromptCreator,
+    CombinedDetectionPromptCreator,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,13 @@ class GeminiAnalyzer:
         self.input_prompt_creator = InputDetectionPromptCreator()
         self.button_prompt_creator = ButtonDetectionPromptCreator()
         self.link_prompt_creator = LinkDetectionPromptCreator()
+        self.combined_prompt_creator = CombinedDetectionPromptCreator()
 
     def _configure_gemini(self):
         """Configure Gemini API"""
         logger.debug("Configuring Gemini API...")
         genai.configure(api_key=GEMINI_API_KEY)
-        self.model = genai.GenerativeModel("gemini-2.5-flash")
+        self.model = genai.GenerativeModel(GEMINI_MODEL_NAME)
         self.api_key = GEMINI_API_KEY  # Store API key for async HTTP calls
         logger.debug("Gemini API configured successfully")
 
@@ -98,7 +100,7 @@ class GeminiAnalyzer:
         import aiohttp
 
         # Configure the request
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_NAME}:generateContent"
         headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
 
         data = {
@@ -124,8 +126,7 @@ class GeminiAnalyzer:
         self, nodes: List[Dict[str, Any]], detection_types: List[str] = None
     ) -> Dict[str, Dict[str, str]]:
         """
-        Analyze nodes for multiple detection types asynchronously and combine results
-        Includes 2-second delay between API calls to prevent quota limits
+        Analyze nodes for multiple detection types concurrently and combine results
 
         Args:
             nodes: List of node dictionaries with complete structure
@@ -138,29 +139,52 @@ class GeminiAnalyzer:
             detection_types = ["text_input", "button", "link"]
 
         logger.info(
-            f"Starting async analysis for {len(detection_types)} detection types: {detection_types}"
+            f"Starting concurrent analysis for {len(detection_types)} detection types: {detection_types}"
         )
 
-        results = {}
+        # Create tasks for all detection types to run concurrently
+        tasks = []
+        for detection_type in detection_types:
+            task = self._analyze_detection_type(nodes, detection_type)
+            tasks.append(task)
 
-        # Process each detection type sequentially with delay to avoid quota limits
-        for i, detection_type in enumerate(detection_types):
-            try:
-                logger.info(f"Processing {detection_type} detection...")
-                result = await self.analyze_nodes(nodes, detection_type)
+        # Wait for all tasks to complete concurrently
+        results_list = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        results = {}
+        for i, result in enumerate(results_list):
+            detection_type = detection_types[i]
+
+            if isinstance(result, Exception):
+                logger.error(f"Error in {detection_type} detection: {result}")
+                results[detection_type] = {}
+            else:
                 results[detection_type] = result
                 logger.info(
                     f"{detection_type} detection completed with {len(result)} results"
                 )
 
-                # # Add 5-second delay between API calls (except for the last one)
-                # if i < len(detection_types) - 1:
-                #     logger.info(f"Waiting 3 seconds before next API call...")
-                #     await asyncio.sleep(3)
+                # Print detailed results for this detection type
+                if result:
+                    print(f"\n🔍 {detection_type.upper()} DETECTION RESULTS:")
+                    print(f"Found {len(result)} {detection_type} elements:")
 
-            except Exception as e:
-                logger.error(f"Error in {detection_type} detection: {e}")
-                results[detection_type] = {}
+                    # Print the detection results dictionary
+                    detection_dict = {}
+                    node_ids = []
+                    for node_id, node_info in result.items():
+                        tag = node_info.get("tag", "unknown")
+                        detection_dict[node_id] = {"tag": tag}
+                        node_ids.append(node_id)
+
+                    print(f"Detection Dictionary: {detection_dict}")
+                    print(f"Node IDs: {node_ids}")
+                    print()
+                else:
+                    print(f"\n🔍 {detection_type.upper()} DETECTION RESULTS:")
+                    print(f"No {detection_type} elements found")
+                    print()
 
         # Combine all results
         combined_results = self._combine_results(results)
@@ -168,7 +192,50 @@ class GeminiAnalyzer:
             f"Combined results: {len(combined_results)} total unique nodes from {len(detection_types)} detection types"
         )
 
+        # Print combined results summary
+        if combined_results:
+            print(f"\n📊 COMBINED DETECTION RESULTS:")
+            print(f"Total unique nodes detected: {len(combined_results)}")
+
+            # Create simplified combined dictionary with only node_id and tag
+            combined_dict = {}
+            all_node_ids = []
+            for node_id, node_info in combined_results.items():
+                tag = node_info.get("tag", "unknown")
+                combined_dict[node_id] = {"tag": tag}
+                all_node_ids.append(node_id)
+
+            print(f"Combined Dictionary: {combined_dict}")
+            print(f"All Node IDs: {all_node_ids}")
+            print()
+        else:
+            print(f"\n📊 COMBINED DETECTION RESULTS:")
+            print("No elements detected across all detection types")
+            print()
+
         return combined_results
+
+    async def _analyze_detection_type(
+        self, nodes: List[Dict[str, Any]], detection_type: str
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Analyze nodes for a specific detection type (wrapper for analyze_nodes)
+
+        Args:
+            nodes: List of node dictionaries
+            detection_type: Type of detection to perform
+
+        Returns:
+            Detection results for the specified type
+        """
+        logger.info(f"Starting {detection_type} detection...")
+        try:
+            result = await self.analyze_nodes(nodes, detection_type)
+            logger.info(f"{detection_type} detection completed successfully")
+            return result
+        except Exception as e:
+            logger.error(f"Error in {detection_type} detection: {e}")
+            raise
 
     def _combine_results(
         self, results: Dict[str, Dict[str, Dict[str, str]]]
@@ -471,3 +538,175 @@ Analyze the nodes above and return your JSON response:"""
         except Exception as e:
             logger.error(f"Error parsing response for {detection_type}: {e}")
             return {}
+
+    async def analyze_nodes_combined(
+        self, nodes: List[Dict[str, Any]], detection_types: List[str] = None
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Analyze nodes using a single combined prompt for all detection types
+
+        Args:
+            nodes: List of node dictionaries with complete structure
+            detection_types: List of detection types to analyze (default: ["text_input", "button", "link", "select"])
+
+        Returns:
+            Dictionary with node_id as keys and detection results as values
+        """
+        if detection_types is None:
+            detection_types = ["text_input", "button", "link", "select"]
+
+        logger.info(
+            f"Starting combined Gemini analysis for {len(detection_types)} detection types: {detection_types}"
+        )
+
+        # Create combined prompt for all detection types
+        prompt = self.combined_prompt_creator.create_prompt(nodes, detection_types)
+
+        # Write prompt to file for debugging
+        self._write_prompt_to_file(prompt, "combined")
+
+        try:
+            # Send request to Gemini asynchronously
+            logger.info(f"Sending combined request to Gemini API...")
+            response = await self._generate_content_async(prompt)
+            logger.info(
+                f"Gemini API response received successfully for combined analysis"
+            )
+
+            # Parse response
+            result = self._parse_combined_response(response, detection_types)
+            logger.info(
+                f"Successfully parsed {len(result)} results from combined Gemini response"
+            )
+
+            # Post-process and log results grouped by tag type
+            self._log_results_by_tag_type(result)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error using Gemini for combined detection: {e}")
+            logger.info(f"Gemini combined detection failed - returning empty result")
+            return {}
+
+    def _parse_combined_response(
+        self, response_text: str, detection_types: List[str]
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Parse combined Gemini response and extract detection results
+
+        Args:
+            response_text: Raw response text from Gemini
+            detection_types: List of detection types that were analyzed
+
+        Returns:
+            Dictionary with node_id as keys and detection results as values
+        """
+        logger.info(f"Parsing combined Gemini response...")
+
+        try:
+            # Try to extract JSON from the response
+            json_start = response_text.find("{")
+            json_end = response_text.rfind("}") + 1
+
+            if json_start == -1 or json_end == 0:
+                logger.warning(f"No JSON found in combined Gemini response")
+                return {}
+
+            json_str = response_text[json_start:json_end]
+            result = json.loads(json_str)
+
+            # Validate the result structure
+            if not isinstance(result, dict):
+                logger.warning(f"Invalid result structure for combined detection")
+                return {}
+
+            # Simplify the result to only include tag
+            simplified_result = {}
+            for node_id, node_info in result.items():
+                if isinstance(node_info, dict):
+                    tag = node_info.get("tag", "unknown")
+                    simplified_result[node_id] = {"tag": tag}
+                else:
+                    # If node_info is not a dict, convert it
+                    tag = str(node_info)
+                    simplified_result[node_id] = {"tag": tag}
+
+            logger.info(
+                f"Successfully parsed {len(simplified_result)} results from combined detection"
+            )
+            return simplified_result
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parsing error for combined detection: {e}")
+            logger.debug(f"Raw response: {response_text}")
+            return {}
+        except Exception as e:
+            logger.error(f"Error parsing combined response: {e}")
+            return {}
+
+    def _log_results_by_tag_type(self, result: Dict[str, Dict[str, str]]):
+        """
+        Post-process and log results grouped by tag type
+
+        Args:
+            result: Dictionary with node_id as keys and {"tag": "value"} as values
+        """
+        if not result:
+            logger.info("No elements detected - no results to group by tag type")
+            return
+
+        # Group node IDs by tag type
+        tag_groups = {"input": [], "button": [], "select": [], "link": []}
+
+        for node_id, node_info in result.items():
+            tag = node_info.get("tag", "unknown")
+            if tag in tag_groups:
+                tag_groups[tag].append(node_id)
+            else:
+                # Handle unknown tags
+                if "unknown" not in tag_groups:
+                    tag_groups["unknown"] = []
+                tag_groups["unknown"].append(node_id)
+
+        # Log the grouped results
+        logger.info("=" * 60)
+        logger.info("POST-PROCESSED RESULTS GROUPED BY TAG TYPE:")
+        logger.info("=" * 60)
+
+        total_elements = len(result)
+        logger.info(f"Total elements detected: {total_elements}")
+        logger.info("")
+
+        for tag, node_ids in tag_groups.items():
+            if node_ids:  # Only log groups that have elements
+                logger.info(f"🎯 {tag.upper()} ELEMENTS ({len(node_ids)} nodes):")
+                logger.info(f"   Node IDs: {node_ids}")
+                logger.info("")
+
+        # Log summary
+        logger.info("📊 SUMMARY:")
+        for tag, node_ids in tag_groups.items():
+            if node_ids:
+                percentage = (len(node_ids) / total_elements) * 100
+                logger.info(f"   {tag}: {len(node_ids)} elements ({percentage:.1f}%)")
+
+        logger.info("=" * 60)
+
+    def _map_tag_to_detection_type(self, tag: str) -> str:
+        """
+        Map a detected tag to its corresponding detection type
+
+        Args:
+            tag: The detected tag (input, button, select, link)
+
+        Returns:
+            The corresponding detection type
+        """
+        tag_mapping = {
+            "input": "text_input",
+            "button": "button",
+            "select": "select",
+            "link": "link",
+        }
+        return tag_mapping.get(tag, "unknown")

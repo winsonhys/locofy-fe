@@ -30,7 +30,7 @@ async def main():
                 FIGMA_FILE_KEY, START_NODE_ID, max_depth=None
             )
         )
-
+        print(all_results)
         # Group results by detection type
         results_by_type = {"text_input": [], "button": [], "link": []}
         for node_id, node_info in all_results.items():
@@ -47,10 +47,13 @@ async def main():
             print(f"{dtype}:")
             nodes = results_by_type[dtype]
             if nodes:
-                for node_id, tag in nodes:
-                    print(f"  - Node {node_id}, Tag: {tag}")
+                # Extract just the node IDs for a clean list
+                node_ids = [node_id for node_id, tag in nodes]
+                print(f"  Node IDs: {node_ids}")
+                print(f"  Count: {len(node_ids)}")
             else:
-                print("  (none)")
+                print("  Node IDs: []")
+                print("  Count: 0")
 
     except Exception as e:
         logger.error(f"Error during async testing: {e}")
