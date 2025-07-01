@@ -490,6 +490,175 @@ Start by reviewing the results. If you need more details about specific nodes, u
             api_queries_made=api_queries_made,
         )
 
+    def _log_verification_results(
+        self, result: VerificationResult, file_key: str
+    ) -> None:
+        """Log verification results in the specified format"""
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"verification_results_{file_key}_{timestamp}.json"
+
+            # Filter and format results
+            high_confidence_results = {}
+            low_confidence_results = {}
+
+            for node_id, data in result.verified_results.items():
+                verified_tag = data.get("tag", "none")
+                confidence = data.get("confidence", 0.0)
+
+                # Format: {node_id: {"tag": type}}
+                formatted_result = {node_id: {"tag": verified_tag}}
+
+                if confidence >= 0.5:
+                    high_confidence_results[node_id] = formatted_result
+                else:
+                    low_confidence_results[node_id] = {
+                        "result": formatted_result,
+                        "confidence": confidence,
+                        "notes": data.get("notes", ""),
+                    }
+
+            # Create log data
+            log_data = {
+                "file_key": file_key,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "high_confidence_results": high_confidence_results,
+                "low_confidence_results": low_confidence_results,
+                "summary": {
+                    "total_elements": len(result.verified_results),
+                    "high_confidence_count": len(high_confidence_results),
+                    "low_confidence_count": len(low_confidence_results),
+                    "overall_confidence": (
+                        sum(result.confidence_scores.values())
+                        / len(result.confidence_scores)
+                        if result.confidence_scores
+                        else 0.0
+                    ),
+                },
+            }
+
+            # Write to file
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(log_data, f, indent=2)
+
+            logger.info(f"Verification results logged to: {filename}")
+
+        except Exception as e:
+            logger.error(f"Failed to log verification results: {e}")
+
+    def get_final_results(
+        self, verification_result: VerificationResult
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Get final results in the specified format, bundling confidence check into the workflow.
+
+        This method combines original and verified results, using verified results for high-confidence
+        classifications and falling back to original results for low-confidence ones.
+
+        Args:
+            verification_result: The VerificationResult from run_agentic_verification
+
+        Returns:
+            Dictionary in format: {node_id: {"tag": detected_tag}}
+        """
+        final_results = {}
+
+        # Process each node
+        for node_id in verification_result.original_results.keys():
+            original_tag = verification_result.original_results[node_id].get(
+                "tag", "none"
+            )
+
+            # Check if we have verified results for this node
+            if node_id in verification_result.verified_results:
+                verified_data = verification_result.verified_results[node_id]
+                verified_tag = verified_data.get("tag", "none")
+                confidence = verified_data.get("confidence", 0.0)
+
+                # Use verified result if confidence is high enough (≥50%)
+                if confidence >= 0.5:
+                    final_results[node_id] = {"tag": verified_tag}
+                    logger.debug(
+                        f"Node {node_id}: Using verified result '{verified_tag}' (confidence: {confidence:.2f})"
+                    )
+                else:
+                    # Fall back to original result for low confidence
+                    final_results[node_id] = {"tag": original_tag}
+                    logger.debug(
+                        f"Node {node_id}: Using original result '{original_tag}' (verified confidence too low: {confidence:.2f})"
+                    )
+            else:
+                # No verification available, use original result
+                final_results[node_id] = {"tag": original_tag}
+                logger.debug(
+                    f"Node {node_id}: Using original result '{original_tag}' (no verification available)"
+                )
+
+        logger.info(f"Final results generated: {len(final_results)} elements")
+        return final_results
+
+    async def run_and_get_final_results(
+        self, file_key: str, node_id: str, max_depth: Optional[int] = None
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Run the complete agentic verification workflow and return final results in the specified format.
+
+        This is a convenience method that combines run_agentic_verification and get_final_results.
+
+        Args:
+            file_key: Figma file key
+            node_id: Starting node ID
+            max_depth: Maximum depth for DFS traversal
+
+        Returns:
+            Dictionary in format: {node_id: {"tag": detected_tag}}
+        """
+        logger.info(f"🚀 Running complete workflow with final results output")
+
+        # Run the verification workflow
+        verification_result = await self.run_agentic_verification(
+            file_key, node_id, max_depth
+        )
+
+        # Get final results in the specified format
+        final_results = self.get_final_results(verification_result)
+
+        logger.info(
+            f"✅ Complete workflow finished: {len(final_results)} final results"
+        )
+        return final_results
+
+    async def run_with_detailed_results(
+        self, file_key: str, node_id: str, max_depth: Optional[int] = None
+    ) -> tuple[Dict[str, Dict[str, str]], VerificationResult]:
+        """
+        Run the complete agentic verification workflow and return both final results and detailed verification info.
+
+        Args:
+            file_key: Figma file key
+            node_id: Starting node ID
+            max_depth: Maximum depth for DFS traversal
+
+        Returns:
+            Tuple of (final_results, verification_result) where:
+            - final_results: Dictionary in format: {node_id: {"tag": detected_tag}}
+            - verification_result: Detailed VerificationResult with confidence scores, notes, etc.
+        """
+        logger.info(f"🚀 Running complete workflow with detailed results output")
+
+        # Run the verification workflow
+        verification_result = await self.run_agentic_verification(
+            file_key, node_id, max_depth
+        )
+
+        # Get final results in the specified format
+        final_results = self.get_final_results(verification_result)
+
+        logger.info(
+            f"✅ Complete workflow finished: {len(final_results)} final results"
+        )
+        return final_results, verification_result
+
     async def run_agentic_verification(
         self, file_key: str, node_id: str, max_depth: Optional[int] = None
     ) -> VerificationResult:
@@ -536,6 +705,9 @@ Start by reviewing the results. If you need more details about specific nodes, u
                 f"📊 API queries made: {len(verification_result.api_queries_made)}"
             )
 
+            # Log verification results
+            self._log_verification_results(verification_result, file_key)
+
             return verification_result
 
         except Exception as e:
@@ -560,10 +732,11 @@ async def main():
         print("🔍 Starting agentic verification...")
         start_time = time.time()
 
-        result = await workflow.run_agentic_verification(
+        # Get final results in the specified format
+        final_results, verification_result = await workflow.run_with_detailed_results(
             FIGMA_FILE_KEY,
             START_NODE_ID,
-            max_depth=2,  # Use smaller depth for faster testing
+            max_depth=None,  # Use smaller depth for faster testing
         )
 
         end_time = time.time()
@@ -572,87 +745,98 @@ async def main():
         print(f"⏱️  Analysis completed in {analysis_time:.2f} seconds")
         print()
 
-        if result.original_results:
+        if final_results:
             print("✅ Agentic verification successful!")
             print()
 
-            # Display original results
-            print("📋 ORIGINAL ANALYSIS RESULTS:")
-            original_count = len(result.original_results)
-            print(f"Total elements: {original_count}")
+            # Display final results
+            print("📋 FINAL RESULTS:")
+            total_count = len(final_results)
+            print(f"Total elements: {total_count}")
 
-            original_tags = {}
-            for node_id, data in result.original_results.items():
-                tag = data.get("tag", "none")
-                original_tags[tag] = original_tags.get(tag, 0) + 1
+            # Count tags
+            tag_distribution = {}
+            for node_id, data in final_results.items():
+                tag = data["tag"]
+                tag_distribution[tag] = tag_distribution.get(tag, 0) + 1
                 print(f"  {node_id}: {tag}")
 
             print()
-            print("🎯 Original Distribution:")
-            for tag, count in original_tags.items():
+            print("🎯 Final Distribution:")
+            for tag, count in tag_distribution.items():
                 print(f"  {tag.upper()}: {count}")
 
+            # Show detailed verification information
             print()
+            print("🔍 DETAILED VERIFICATION INFO:")
+            print(
+                f"  - Original elements analyzed: {len(verification_result.original_results)}"
+            )
+            print(f"  - Elements verified: {len(verification_result.verified_results)}")
+            print(f"  - API queries made: {len(verification_result.api_queries_made)}")
 
-            # Display verified results
-            if result.verified_results:
-                print("🔍 VERIFIED RESULTS:")
-                verified_count = len(result.verified_results)
-                print(f"Total verified: {verified_count}")
+            # Show confidence statistics
+            if verification_result.confidence_scores:
+                avg_confidence = sum(
+                    verification_result.confidence_scores.values()
+                ) / len(verification_result.confidence_scores)
+                print(f"  - Average confidence: {avg_confidence:.2f}")
 
-                verified_tags = {}
-                changes = []
-
-                for node_id, data in result.verified_results.items():
-                    original_tag = result.original_results.get(node_id, {}).get(
-                        "tag", "none"
-                    )
-                    verified_tag = data.get("tag", "none")
-                    confidence = data.get("confidence", 0.0)
-                    notes = data.get("notes", "")
-
-                    verified_tags[verified_tag] = verified_tags.get(verified_tag, 0) + 1
-
-                    if original_tag != verified_tag:
-                        changes.append(
-                            f"  {node_id}: {original_tag} → {verified_tag} (confidence: {confidence:.2f})"
-                        )
-                    else:
-                        print(
-                            f"  {node_id}: {verified_tag} ✓ (confidence: {confidence:.2f})"
-                        )
-
-                print()
-                print("🎯 Verified Distribution:")
-                for tag, count in verified_tags.items():
-                    print(f"  {tag.upper()}: {count}")
-
-                if changes:
-                    print()
-                    print("🔄 CHANGES MADE:")
-                    for change in changes:
-                        print(change)
+                high_conf_count = sum(
+                    1
+                    for conf in verification_result.confidence_scores.values()
+                    if conf >= 0.5
+                )
+                print(f"  - High confidence (≥50%): {high_conf_count}")
+                print(
+                    f"  - Low confidence (<50%): {len(verification_result.confidence_scores) - high_conf_count}"
+                )
 
             # Display verification notes
-            if result.verification_notes:
+            if verification_result.verification_notes:
                 print()
                 print("📝 VERIFICATION NOTES:")
-                for note in result.verification_notes:
+                for note in verification_result.verification_notes:
                     print(f"  • {note}")
-
-            # Display API usage
-            if result.api_queries_made:
-                print()
-                print("🔗 FIGMA API QUERIES:")
-                for query in result.api_queries_made:
-                    print(f"  • {query}")
 
             # Performance metrics
             print()
             print("⚡ PERFORMANCE METRICS:")
             print(f"  - Total time: {analysis_time:.2f} seconds")
-            print(f"  - API queries: {len(result.api_queries_made)}")
-            print(f"  - Elements per second: {original_count / analysis_time:.2f}")
+            print(f"  - Elements per second: {total_count / analysis_time:.2f}")
+
+            # Example of the returned format
+            print()
+            print("📄 RETURNED FORMAT EXAMPLE:")
+            print("The function returns a dictionary in this format:")
+            print("{")
+            for i, (node_id, data) in enumerate(
+                list(final_results.items())[:3]
+            ):  # Show first 3
+                tag = data["tag"]
+                print(f'  "{node_id}": {{"tag": "{tag}"}}' + ("," if i < 2 else ""))
+            if len(final_results) > 3:
+                print("  ...")
+            print("}")
+
+            # Show usage examples
+            print()
+            print("💡 USAGE EXAMPLES:")
+            print("  # Simple usage - just get final results")
+            print(
+                "  final_results = await workflow.run_and_get_final_results(file_key, node_id)"
+            )
+            print()
+            print(
+                "  # Detailed usage - get both final results and verification details"
+            )
+            print(
+                "  final_results, verification_result = await workflow.run_with_detailed_results(file_key, node_id)"
+            )
+            print("  # Access confidence scores: verification_result.confidence_scores")
+            print(
+                "  # Access verification notes: verification_result.verification_notes"
+            )
 
         else:
             print("❌ No results obtained")
