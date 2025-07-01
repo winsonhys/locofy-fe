@@ -75,6 +75,97 @@ class FigmaAgenticVerificationWorkflow:
             logger.error(f"Error querying Figma API for node {node_id}: {e}")
             return {}
 
+    def _filter_api_response(self, api_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Ultra-compact API response format for minimal token usage"""
+        if not api_data or "nodes" not in api_data:
+            return {}
+
+        # Use compact format: node_id -> [name, type, component_id, props, text, interactions]
+        compact_data = {}
+
+        for node_id, node_data in api_data["nodes"].items():
+            # Handle both direct node data and nested document structure
+            if "document" in node_data:
+                doc = node_data["document"]
+            else:
+                doc = node_data
+
+            # Extract only the most critical fields in compact format
+            compact_node = []
+
+            # 0: name
+            compact_node.append(doc.get("name", ""))
+
+            # 1: type
+            compact_node.append(doc.get("type", ""))
+
+            # 2: component_id (or None)
+            compact_node.append(doc.get("componentId"))
+
+            # 3: essential component properties (filtered and simplified)
+            props = {}
+            if "componentProperties" in doc:
+                for key, value in doc["componentProperties"].items():
+                    # Only keep properties that directly indicate UI element type
+                    if any(
+                        keyword in key.lower()
+                        for keyword in [
+                            "type",
+                            "state",
+                            "variant",
+                            "placeholder",
+                            "text",
+                            "label",
+                            "button",
+                            "input",
+                            "select",
+                            "disabled",
+                        ]
+                    ):
+                        # Extract just the value, not the full object
+                        if isinstance(value, dict) and "value" in value:
+                            props[key] = value["value"]
+                        else:
+                            props[key] = str(value)
+            compact_node.append(props if props else None)
+
+            # 4: text content
+            compact_node.append(doc.get("characters", ""))
+
+            # 5: interactions (simplified to just trigger types)
+            interactions = []
+            if "interactions" in doc and doc["interactions"]:
+                for interaction in doc["interactions"]:
+                    trigger = interaction.get("trigger", {})
+                    trigger_type = trigger.get("type", "")
+                    if trigger_type:
+                        interactions.append(trigger_type)
+            compact_node.append(interactions if interactions else None)
+
+            # 6: visual indicators (corner radius, fills, strokes)
+            visual = {}
+            if "cornerRadius" in doc:
+                visual["r"] = doc["cornerRadius"]
+            if "fills" in doc and doc["fills"]:
+                visual["f"] = 1  # Has fills
+            if "strokes" in doc and doc["strokes"]:
+                visual["s"] = 1  # Has strokes
+            compact_node.append(visual if visual else None)
+
+            # 7: children summary (just count and main types)
+            children_info = None
+            if "children" in doc and doc["children"]:
+                child_types = list(set(child.get("type") for child in doc["children"]))
+                children_info = {
+                    "c": len(doc["children"]),
+                    "t": child_types[:2],  # Only first 2 types
+                }
+            compact_node.append(children_info)
+
+            compact_data[node_id] = compact_node
+
+        return {"n": compact_data}  # "n" for nodes
+
     def _create_verification_prompt(
         self, original_results: Dict[str, Dict[str, str]], file_key: str
     ) -> str:
@@ -102,7 +193,20 @@ YOUR TASK:
 AVAILABLE FIGMA API ENDPOINTS:
 - GET /files/{{file_key}}/nodes?ids={{node_id}} - Get specific node data
 
-RESPONSE FORMAT:
+COMPACT API RESPONSE FORMAT:
+API responses use ultra-compact format: {{"n": {{"node_id": [name, type, component_id, props, text, interactions, visual, children]}}}}
+- name: element name
+- type: element type (INSTANCE, FRAME, etc.)
+- component_id: component identifier (if any)
+- props: essential component properties (type, state, variant, placeholder, text, label, button, input, select, disabled)
+- text: text content
+- interactions: list of interaction trigger types (ON_CLICK, ON_HOVER, etc.)
+- visual: {{"r": cornerRadius, "f": hasFills, "s": hasStrokes}}
+- children: {{"c": count, "t": [types]}}
+
+IMPORTANT: You must respond with valid JSON only. Do not include any text before or after the JSON.
+
+RESPONSE FORMAT (respond with this exact JSON structure):
 {{
   "verifications": {{
     "node_id": {{
@@ -116,7 +220,7 @@ RESPONSE FORMAT:
   "overall_confidence": 0.92
 }}
 
-Start by reviewing the results. If you need more details about specific nodes, use QUERY_API format."""
+Start by reviewing the results. If you need more details about specific nodes, use QUERY_API format. When you're ready to provide verification, respond with ONLY the JSON object above."""
 
         return prompt
 
@@ -133,6 +237,15 @@ Start by reviewing the results. If you need more details about specific nodes, u
         # Create initial verification prompt
         prompt = self._create_verification_prompt(original_results, file_key)
 
+        # Write prompts to file for transparency
+        prompt_log = []
+        prompt_log.append("=" * 80)
+        prompt_log.append("FIGMA AGENTIC VERIFICATION PROMPTS LOG")
+        prompt_log.append("=" * 80)
+        prompt_log.append(f"File Key: {file_key}")
+        prompt_log.append(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        prompt_log.append("")
+
         # Start conversation with Gemini
         messages = [
             SystemMessage(
@@ -140,6 +253,18 @@ Start by reviewing the results. If you need more details about specific nodes, u
             ),
             HumanMessage(content=prompt),
         ]
+
+        # Log initial prompt
+        prompt_log.append("INITIAL PROMPT:")
+        prompt_log.append("-" * 40)
+        prompt_log.append("System Message:")
+        prompt_log.append(
+            "You are a Figma UI element verification expert with API access."
+        )
+        prompt_log.append("")
+        prompt_log.append("User Message:")
+        prompt_log.append(prompt)
+        prompt_log.append("")
 
         max_iterations = 5  # Prevent infinite loops
         iteration = 0
@@ -150,11 +275,22 @@ Start by reviewing the results. If you need more details about specific nodes, u
                 response = await self.llm.ainvoke(messages)
                 content = response.content.strip()
 
+                # Log Gemini's response
+                prompt_log.append(f"ITERATION {iteration + 1} - GEMINI RESPONSE:")
+                prompt_log.append("-" * 40)
+                prompt_log.append(content)
+                prompt_log.append("")
+
                 # Check if Gemini wants to query the API
                 if "QUERY_API:" in content:
                     # Extract API queries
                     lines = content.split("\n")
                     new_messages = []
+
+                    prompt_log.append(
+                        f"ITERATION {iteration + 1} - API QUERIES DETECTED:"
+                    )
+                    prompt_log.append("-" * 40)
 
                     for line in lines:
                         if line.strip().startswith("QUERY_API:"):
@@ -170,47 +306,103 @@ Start by reviewing the results. If you need more details about specific nodes, u
                                     )
                                     api_queries_made.append(node_id)
 
+                                    # Log API query
+                                    prompt_log.append(f"API Query: {json_str}")
+
                                     # Query Figma API
                                     api_data = await self._query_figma_api(
                                         file_key, node_id
                                     )
 
-                                    # Add API response to conversation
-                                    api_response = f"API DATA for node {node_id}: {json.dumps(api_data, indent=2)}"
+                                    # Filter API response to reduce token usage
+                                    filtered_api_data = self._filter_api_response(
+                                        api_data
+                                    )
+
+                                    # Log API response
+                                    prompt_log.append("API Response:")
+                                    prompt_log.append(
+                                        json.dumps(filtered_api_data, indent=2)
+                                    )
+                                    prompt_log.append("")
+
+                                    # Add filtered API response to conversation
+                                    api_response = f"API DATA for node {node_id}: {json.dumps(filtered_api_data, indent=2)}"
                                     new_messages.append(
                                         HumanMessage(content=api_response)
                                     )
 
                             except json.JSONDecodeError as e:
                                 logger.error(f"Failed to parse API query: {line}")
+                                prompt_log.append(
+                                    f"ERROR: Failed to parse API query: {line}"
+                                )
                                 continue
                         else:
                             new_messages.append(HumanMessage(content=line))
 
                     # Add new messages to conversation
                     messages.extend(new_messages)
-                    messages.append(
-                        HumanMessage(
-                            content="Please continue with your verification analysis."
-                        )
+                    follow_up_message = (
+                        "Please continue with your verification analysis."
                     )
+                    messages.append(HumanMessage(content=follow_up_message))
+
+                    # Log follow-up message
+                    prompt_log.append("Follow-up Message:")
+                    prompt_log.append(follow_up_message)
+                    prompt_log.append("")
 
                 else:
                     # Try to parse the final verification result
                     try:
+                        # Check if response is empty
+                        if not content.strip():
+                            logger.error("Gemini returned empty response")
+                            verification_notes.append(
+                                "Error: Gemini returned empty response"
+                            )
+                            break
+
                         # Extract JSON from response
+                        json_content = content
                         if "```json" in content:
                             start = content.find("```json") + 7
                             end = content.find("```", start)
-                            json_content = content[start:end].strip()
+                            if end != -1:
+                                json_content = content[start:end].strip()
                         elif "```" in content:
                             start = content.find("```") + 3
                             end = content.find("```", start)
-                            json_content = content[start:end].strip()
-                        else:
-                            json_content = content
+                            if end != -1:
+                                json_content = content[start:end].strip()
+
+                        # Try to find JSON object in the response
+                        if not json_content.strip().startswith("{"):
+                            # Look for JSON object in the response
+                            brace_start = content.find("{")
+                            brace_end = content.rfind("}")
+                            if (
+                                brace_start != -1
+                                and brace_end != -1
+                                and brace_end > brace_start
+                            ):
+                                json_content = content[brace_start : brace_end + 1]
+
+                        if not json_content.strip():
+                            logger.error("No JSON content found in response")
+                            verification_notes.append(
+                                "Error: No JSON content found in response"
+                            )
+                            break
 
                         verification_data = json.loads(json_content)
+
+                        # Log final verification result
+                        prompt_log.append("FINAL VERIFICATION RESULT:")
+                        prompt_log.append("-" * 40)
+                        prompt_log.append(json.dumps(verification_data, indent=2))
+                        prompt_log.append("")
 
                         # Extract verification results
                         verifications = verification_data.get("verifications", {})
@@ -246,6 +438,28 @@ Start by reviewing the results. If you need more details about specific nodes, u
                         verification_notes.append(
                             f"Failed to parse response: {content[:100]}..."
                         )
+                        prompt_log.append(
+                            "ERROR: Failed to parse verification response"
+                        )
+                        prompt_log.append(f"Error: {str(e)}")
+                        prompt_log.append("Raw response:")
+                        prompt_log.append(content)
+
+                        # Try to create a fallback verification based on original results
+                        logger.info(
+                            "Creating fallback verification based on original results"
+                        )
+                        for node_id, original_data in original_results.items():
+                            verified_results[node_id] = {
+                                "tag": original_data.get("tag", "none"),
+                                "confidence": 0.7,  # Lower confidence due to parsing failure
+                                "notes": "Fallback verification due to parsing error",
+                            }
+                            confidence_scores[node_id] = 0.7
+
+                        verification_notes.append(
+                            "Fallback verification applied due to parsing error"
+                        )
                         break
 
                 iteration += 1
@@ -253,7 +467,20 @@ Start by reviewing the results. If you need more details about specific nodes, u
             except Exception as e:
                 logger.error(f"Error in verification iteration {iteration}: {e}")
                 verification_notes.append(f"Error: {str(e)}")
+                prompt_log.append(f"ERROR in iteration {iteration}: {str(e)}")
                 break
+
+        # Write prompts to file
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"verification_prompts_{timestamp}.txt"
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write("\n".join(prompt_log))
+            logger.info(f"Verification prompts written to: {filename}")
+            verification_notes.append(f"Prompts logged to: {filename}")
+        except Exception as e:
+            logger.error(f"Failed to write prompts to file: {e}")
+            verification_notes.append(f"Failed to write prompts: {str(e)}")
 
         return VerificationResult(
             original_results=original_results,
@@ -334,7 +561,9 @@ async def main():
         start_time = time.time()
 
         result = await workflow.run_agentic_verification(
-            FIGMA_FILE_KEY, START_NODE_ID, max_depth=2
+            FIGMA_FILE_KEY,
+            START_NODE_ID,
+            max_depth=2,  # Use smaller depth for faster testing
         )
 
         end_time = time.time()
