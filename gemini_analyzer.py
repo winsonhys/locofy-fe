@@ -55,9 +55,6 @@ class GeminiAnalyzer:
             f"Starting async Gemini {detection_type} detection for {len(nodes)} nodes"
         )
 
-        # Add 2-second delay to prevent hitting API quota limits
-        await asyncio.sleep(2)
-
         # Create prompt based on detection type
         prompt = self._create_prompt(nodes, detection_type)
 
@@ -156,10 +153,10 @@ class GeminiAnalyzer:
                     f"{detection_type} detection completed with {len(result)} results"
                 )
 
-                # Add 2-second delay between API calls (except for the last one)
-                if i < len(detection_types) - 1:
-                    logger.info(f"Waiting 2 seconds before next API call...")
-                    await asyncio.sleep(2)
+                # # Add 5-second delay between API calls (except for the last one)
+                # if i < len(detection_types) - 1:
+                #     logger.info(f"Waiting 3 seconds before next API call...")
+                #     await asyncio.sleep(3)
 
             except Exception as e:
                 logger.error(f"Error in {detection_type} detection: {e}")

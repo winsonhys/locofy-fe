@@ -591,15 +591,8 @@ class FigmaDFS:
                         parent_name = parent.name
                         parent_type = parent.type
 
-                # Children info
-                child_names = []
-                child_types = []
-                if node.children:
-                    for child in node.children:
-                        child_names.append(child.name)
-                        child_types.append(child.type)
-
-                # Sibling info
+                # Safely handle None for children and siblings
+                children = node.children if node.children is not None else []
                 sibling_names = []
                 sibling_types = []
                 if node.parent_id:
@@ -617,7 +610,7 @@ class FigmaDFS:
                 left_icon_name = None
                 has_right_icon = False
                 right_icon_name = None
-                for child in node.children:
+                for child in children:
                     child_name = getattr(child, "name", "").lower()
                     if (
                         "left" in child_name
@@ -633,7 +626,6 @@ class FigmaDFS:
                     ):
                         has_right_icon = True
                         right_icon_name = getattr(child, "name", None)
-                    # Also check for common dropdown icon names for right icon
                     if any(
                         keyword in child_name
                         for keyword in [
@@ -674,8 +666,8 @@ class FigmaDFS:
                     ),
                     "parent_name": parent_name,
                     "parent_type": parent_type,
-                    "child_names": child_names,
-                    "child_types": child_types,
+                    "child_names": [child.name for child in children],
+                    "child_types": [child.type for child in children],
                     "sibling_names": sibling_names,
                     "sibling_types": sibling_types,
                     "has_left_icon": has_left_icon,
