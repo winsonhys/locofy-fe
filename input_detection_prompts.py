@@ -546,14 +546,20 @@ Analyze each node above and determine if it represents an input field, button, s
         return prompt
 
     def _get_base_prompt(self) -> str:
-        """Get the comprehensive base prompt template for combined detection"""
+        """Get the comprehensive base prompt template for combined detection (agentic workflow)"""
         return f"""You are an expert UI analyst specializing in identifying interactive elements from Figma design nodes. Your task is to analyze each node and determine if it represents an input field, button, select/dropdown, or link.
 
-## Figma Access Information (Optional - You may use this to make better decisions):
-- Figma Access Token: {FIGMA_ACCESS_TOKEN}
-- Figma File Key: {FIGMA_FILE_KEY}
-- Start Node ID: {START_NODE_ID}
-- You can optionally access the Figma file directly to get additional context about the design, but this is not required. You may ignore this information if you prefer to rely solely on the provided node data.
+## Agentic Instructions:
+- You do NOT have access to a Figma access token.
+- You CAN call the Figma API endpoints below to fetch any node's full properties, children, or file structure if you need more information to classify a node.
+- Use the API as much as needed to ensure accurate classification, but avoid unnecessary calls.
+- The Figma file key is: {FIGMA_FILE_KEY}
+- The starting node ID is: {START_NODE_ID}
+
+## Available Figma API Endpoints (for you to use):
+- `GET https://api.figma.com/v1/files/{file_key}`: Fetch the full file structure.
+- `GET https://api.figma.com/v1/files/{file_key}/nodes?ids={node_id}`: Fetch all properties for a specific node (including children, type, name, etc).
+- You may use these endpoints to fetch any node's data as needed for your analysis.
 
 ## Detection Guidelines:
 
@@ -653,14 +659,26 @@ Analyze each node above and determine if it represents an input field, button, s
 - "Delete" = BUTTON
 - "Save" = BUTTON
 
-## Decision Process:
+## Decision Process with Confidence Assessment:
 1. First, determine if the node is a main container (not a child element)
 2. Analyze the node's name, type, and context
 3. Consider the node's styling and visual characteristics
 4. Look at child elements to understand the node's purpose
 5. **Pay special attention to standalone icons - they are usually buttons unless part of an input**
-6. Choose the most appropriate tag: "input", "button", "select", or "link"
-7. If the node doesn't clearly fit any category, exclude it
+6. **Assign confidence levels (0-100) for each possible classification:**
+   - Evaluate how well the node matches each category
+   - Consider naming patterns, structure, styling, and context
+   - Higher confidence for clear matches, lower for ambiguous cases
+7. **Apply confidence thresholds:**
+   - **High (70-100)**: Classify immediately with highest confidence tag
+   - **Medium (40-70)**: Use Figma API to get detailed properties, then re-evaluate
+   - **Low (0-40)**: Ignore the node (don't include in results)
+8. **For medium confidence nodes:** Fetch detailed properties and re-assess confidence levels
+9. **Final classification:** Only include nodes with high confidence (70+) after analysis
+
+## **IMPORTANT: Output ONLY the raw JSON object as specified below. Do NOT include any explanations, markdown, or extra text.**
+
+Analyze each node above following this confidence-based process. Use the available tools to get detailed properties for nodes with medium confidence (40-70). Return your analysis in the JSON format specified above. Only include nodes that clearly match one of the detection categories with high confidence. **Do NOT include any explanations, markdown, or text before or after the JSON. Output ONLY the raw JSON object.**
 
 ## Output Format:
 ```json
@@ -818,69 +836,103 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
         }
 
 
-class FunctionCallingDetectionPromptCreator:
-    """Creates optimized prompts for detection using hybrid workflow: DFS + function calling backup"""
+class AgenticDetectionPromptCreator:
+    """Creates optimized prompts for agentic detection using LangGraph tools"""
 
     def create_prompt(
         self,
         nodes: List[Dict[str, Any]],
         file_key: str,
-        node_id: Optional[str] = None,
+        start_node_id: str,
         detection_types: List[str] = None,
     ) -> str:
         """
-        Create a comprehensive prompt for detection using hybrid workflow
+        Create a comprehensive prompt for agentic detection with tool access
 
         Args:
-            nodes: List of node dictionaries from DFS
-            file_key: Figma file key (for function calling if needed)
-            node_id: Optional specific node ID (for function calling if needed)
+            nodes: List of node dictionaries with complete structure
+            file_key: Figma file key for API access
+            start_node_id: Starting node ID for context
             detection_types: List of detection types to analyze (default: ["text_input", "button", "link", "select"])
 
         Returns:
-            Formatted prompt string for Gemini with function calling capabilities
+            Formatted agentic prompt string for Gemini with tool access
         """
         if detection_types is None:
             detection_types = ["text_input", "button", "link", "select"]
 
         logger.info(
-            f"Creating function calling detection prompt for {detection_types} with {len(nodes)} nodes..."
+            f"Creating agentic detection prompt for {detection_types} with {len(nodes)} nodes..."
         )
 
-        prompt = self._get_base_prompt(file_key, node_id)
+        prompt = self._get_base_prompt(file_key, start_node_id)
 
         # Add filtered nodes to prompt
-        filtered_nodes = self._filter_nodes_for_function_calling_detection(nodes)
+        filtered_nodes = self._filter_nodes_for_agentic_detection(nodes)
 
         for node in filtered_nodes:
             node_line = self._format_node_for_prompt(node)
             prompt += f"\n{node_line}"
 
         prompt += f"""
-Analyze each node above and determine if it represents an input field, button, select/dropdown, or link. Return your analysis in the JSON format specified above. Only include nodes that clearly match one of the detection categories.
+## Analysis Process with Confidence Levels:
 
-If you need additional context about specific nodes, file structure, or want to search for specific elements,
-you can call the following functions:
-- get_figma_file: Get the complete file structure
-- get_figma_node: Get a specific node and its children
-- search_nodes_by_type: Search for nodes of a specific type
-- search_nodes_by_name: Search for nodes by name pattern"""
+1. **Initial Analysis**: For each node, assign a confidence level (0-100) for each possible classification:
+   - "input": confidence level for text input classification
+   - "button": confidence level for button classification  
+   - "select": confidence level for select/dropdown classification
+   - "link": confidence level for link classification
+
+2. **Confidence Thresholds**:
+   - **High Confidence (70-100)**: Classify immediately with the highest confidence tag
+   - **Medium Confidence (40-70)**: Use the Figma API to fetch detailed properties for better classification
+   - **Low Confidence (0-40)**: Ignore the node (don't include in final results)
+
+3. **Tool Usage for Medium Confidence**:
+   - When you encounter nodes with confidence levels between 40-70, use the Figma API endpoint to get detailed properties
+   - Fetch additional data for these nodes to improve classification accuracy
+   - Re-evaluate confidence levels after getting more information
+
+4. **Final Classification**: Only include nodes in your final results that have high confidence (70+) after analysis.
+
+- **IMPORTANT: Output ONLY the raw JSON object as specified below. Do NOT include any explanations, markdown, or extra text.**
+
+Analyze each node above following this confidence-based process. Use the available tools to get detailed properties for nodes with medium confidence (40-70). Return your analysis in the JSON format specified above. Only include nodes that clearly match one of the detection categories with high confidence. **Do NOT include any explanations, markdown, or text before or after the JSON. Output ONLY the raw JSON object.**
+
+## Output Format:
+```json
+{{
+  "<node_id>": {{"tag": "<detected_tag>"}},
+  "<node_id>": {{"tag": "<detected_tag>"}}
+}}
+```
+
+Where <detected_tag> is one of: "input", "button", "select", "link"
+
+## Nodes to Analyze:"""
 
         logger.info(
-            f"Function calling detection prompt created successfully (length: {len(prompt)} characters)"
+            f"Agentic detection prompt created successfully (length: {len(prompt)} characters)"
         )
         return prompt
 
-    def _get_base_prompt(self, file_key: str, node_id: Optional[str] = None) -> str:
-        """Get the comprehensive base prompt template for function calling detection"""
-        node_info = f"Node ID: {node_id}" if node_id else "Complete file analysis"
-
+    def _get_base_prompt(self, file_key: str, start_node_id: str) -> str:
+        """Get the comprehensive base prompt template for agentic detection"""
         return f"""You are an expert UI analyst specializing in identifying interactive elements from Figma design nodes. Your task is to analyze each node and determine if it represents an input field, button, select/dropdown, or link.
 
-## Figma Access Information:
-- Figma File Key: {file_key}
-- {node_info}
-- You have access to nodes from a depth-first search of the Figma design.
+## Agentic Instructions:
+- You do NOT have access to a Figma access token.
+- You have already been provided with the full node structure and basic properties for all nodes in the initial prompt.
+- You CAN call the Figma API endpoint below to fetch additional properties for multiple nodes at once if you need more information to classify a node.
+- **CRITICAL**: Use the API specifically for nodes with medium confidence levels (40-70) to improve classification accuracy.
+- **DO NOT** make API calls for nodes with high confidence (70+) or low confidence (0-40).
+- The Figma file key is: {file_key}
+- The starting node ID is: {start_node_id}
+
+## Available Figma API Endpoint (for you to use):
+- `GET https://api.figma.com/v1/files/{file_key}/nodes?ids=node_id1,node_id2,...`: Fetch detailed properties for multiple nodes at once (including children, type, name, styling, etc).
+- **USE THIS ENDPOINT ONLY** for nodes with medium confidence levels (40-70) to improve classification accuracy.
+- **DO NOT** use this endpoint for nodes with high confidence (70+) or low confidence (0-40).
 
 ## Detection Guidelines:
 
@@ -980,14 +1032,22 @@ you can call the following functions:
 - "Delete" = BUTTON
 - "Save" = BUTTON
 
-## Decision Process:
+## Decision Process with Confidence Assessment:
 1. First, determine if the node is a main container (not a child element)
 2. Analyze the node's name, type, and context
 3. Consider the node's styling and visual characteristics
 4. Look at child elements to understand the node's purpose
 5. **Pay special attention to standalone icons - they are usually buttons unless part of an input**
-6. Choose the most appropriate tag: "input", "button", "select", or "link"
-7. If the node doesn't clearly fit any category, exclude it
+6. **Assign confidence levels (0-100) for each possible classification:**
+   - Evaluate how well the node matches each category
+   - Consider naming patterns, structure, styling, and context
+   - Higher confidence for clear matches, lower for ambiguous cases
+7. **Apply confidence thresholds:**
+   - **High (70-100)**: Classify immediately with highest confidence tag
+   - **Medium (40-70)**: Use Figma API to get detailed properties, then re-evaluate
+   - **Low (0-40)**: Ignore the node (don't include in results)
+8. **For medium confidence nodes:** Fetch detailed properties and re-assess confidence levels
+9. **Final classification:** Only include nodes with high confidence (70+) after analysis
 
 ## Output Format:
 ```json
@@ -1001,25 +1061,25 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
 
 ## Nodes to Analyze:"""
 
-    def _filter_nodes_for_function_calling_detection(
+    def _filter_nodes_for_agentic_detection(
         self, nodes: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Filter nodes for function calling detection (similar to combined detection)
+        Filter nodes for agentic detection (optimized format only)
 
         Args:
-            nodes: List of all nodes
+            nodes: List of all nodes in optimized format
 
         Returns:
-            Filtered list of nodes for function calling detection
+            Filtered list of nodes for agentic detection
         """
         filtered_nodes = []
 
         for node in nodes:
-            node_id = node.get("node_id", "N/A")
-            node_type = node.get("type", "N/A")
-            node_name = node.get("name", "N/A")
-            parent_id = node.get("parent_id", None)
+            # Optimized format only
+            node_id = node.get("id", "N/A")
+            node_type = node.get("t", "N/A")
+            node_name = node.get("n", "N/A")
 
             # Skip nodes that are clearly not candidates
             if node_type in ["LINE", "ELLIPSE", "STAR"]:
@@ -1031,7 +1091,7 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
                 continue
 
             # Skip child elements that are clearly not main containers, but be less restrictive for icons
-            if parent_id and any(
+            if any(
                 skip_name in node_name.lower()
                 for skip_name in [
                     "label",
@@ -1050,7 +1110,7 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
             if node_type == "VECTOR" or "icon" in node_name.lower():
                 # Include standalone icons as they can be buttons
                 # Only skip if they're clearly decorative child elements
-                if parent_id and any(
+                if any(
                     skip_name in node_name.lower()
                     for skip_name in [
                         "decorative",
@@ -1064,62 +1124,58 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
             filtered_nodes.append(node)
 
         logger.info(
-            f"Function calling detection filtering: {len(nodes)} total nodes -> {len(filtered_nodes)} filtered nodes"
+            f"Agentic detection filtering: {len(nodes)} total nodes -> {len(filtered_nodes)} filtered nodes"
         )
         return filtered_nodes
 
     def _format_node_for_prompt(self, node: Dict[str, Any]) -> str:
         """
-        Format a single node for inclusion in the prompt
+        Format a single node for inclusion in the prompt (optimized format only)
 
         Args:
-            node: Node dictionary
+            node: Node dictionary in optimized format
 
         Returns:
             Formatted node string for prompt
         """
-        node_id = node.get("node_id", "N/A")
-        node_type = node.get("type", "N/A")
-        node_name = node.get("name", "N/A")
-        parent_name = node.get("parent_name", "")
-        parent_type = node.get("parent_type", "")
-        child_names = ",".join(node.get("child_names", []))
-        child_types = ",".join(node.get("child_types", []))
-        sibling_names = ",".join(node.get("sibling_names", []))
-        sibling_types = ",".join(node.get("sibling_types", []))
-        has_right_icon = node.get("has_right_icon", False)
-        right_icon_name = node.get("right_icon_name", "")
-        is_wider_than_tall = node.get("is_wider_than_tall", False)
-        text_content = node.get("text_content", "")
+        return self._format_optimized_node_for_prompt(node)
 
-        node_line = f"{node_id}|{node_type}|{node_name}|parent:{parent_name}({parent_type})|children:{child_names}({child_types})|siblings:{sibling_names}({sibling_types})|right_icon:{has_right_icon}:{right_icon_name}|wider_than_tall:{is_wider_than_tall}|text:{text_content}"
+    def _format_optimized_node_for_prompt(self, node: Dict[str, Any]) -> str:
+        """
+        Format an optimized node for inclusion in the prompt (token-efficient format)
 
-        # Add additional data that's relevant for detection
-        if "data" in node and node["data"]:
-            data = node["data"]
+        Args:
+            node: Optimized node dictionary with short field names
 
-            # Add corner radius for input-like styling
-            if "cornerRadius" in data and data.get("cornerRadius", 0) > 0:
-                node_line += f"|r{data.get('cornerRadius')}"
+        Returns:
+            Formatted node string for prompt
+        """
+        node_id = node.get("id", "N/A")
+        node_type = node.get("t", "N/A")  # type
+        node_name = node.get("n", "N/A")  # name
+        pos = node.get("p", [0, 0])  # position
+        size = node.get("s", [0, 0])  # size
+        child_names = ",".join(node.get("c", []))  # children
+        child_types = ",".join(node.get("ct", []))  # child types
+        text_content = node.get("tx", "")  # text
 
-            # Add text content for relevant nodes
-            if node_type in ["FRAME", "RECTANGLE", "INSTANCE"] and "characters" in data:
-                chars = data.get("characters", "").strip()
-                if chars and len(chars) < 50:  # Only short text
-                    node_line += f"|t{chars}"
+        # Calculate if wider than tall
+        width, height = size[0], size[1]
+        is_wider_than_tall = width > height if width > 0 and height > 0 else False
 
-            # Add fill color info for styling
-            if "fills" in data and data["fills"]:
-                fills = data["fills"]
-                if fills and len(fills) > 0:
-                    fill = fills[0]
-                    if "color" in fill:
-                        color = fill["color"]
-                        node_line += f"|c{color.get('r', 0):.2f},{color.get('g', 0):.2f},{color.get('b', 0):.2f}"
+        # Build the node line with optimized format
+        node_line = f"{node_id}|{node_type}|{node_name}|pos:{pos[0]:.1f},{pos[1]:.1f}|size:{width:.1f},{height:.1f}|children:{child_names}({child_types})|wider_than_tall:{is_wider_than_tall}|text:{text_content}"
 
-            # Add stroke info for underlining
-            if "strokes" in data and data["strokes"]:
-                node_line += "|s"
+        # Add optional styling information
+        if "r" in node:  # radius
+            node_line += f"|r{node['r']}"
+
+        if "f" in node:  # fill color
+            fill = node["f"]
+            node_line += f"|c{fill[0]:.2f},{fill[1]:.2f},{fill[2]:.2f}"
+
+        if "st" in node:  # stroke
+            node_line += "|s"
 
         return node_line
 
@@ -1133,7 +1189,7 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
         Returns:
             Dictionary with statistics
         """
-        filtered_nodes = self._filter_nodes_for_function_calling_detection(nodes)
+        filtered_nodes = self._filter_nodes_for_agentic_detection(nodes)
 
         return {
             "total_nodes": len(nodes),

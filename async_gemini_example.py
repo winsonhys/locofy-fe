@@ -31,24 +31,18 @@ async def main():
             )
         )
         print(all_results)
-        # Group results by detection type
-        results_by_type = {"text_input": [], "button": [], "link": []}
+        # Group results by tag type
+        results_by_type = {"input": [], "button": [], "link": [], "select": []}
         for node_id, node_info in all_results.items():
-            detection_types = node_info.get(
-                "detection_types", [node_info.get("detection_type", "unknown")]
-            )
             tag = node_info.get("tag", "unknown")
-            for detection_type in detection_types:
-                if detection_type in results_by_type:
-                    results_by_type[detection_type].append((node_id, tag))
+            if tag in results_by_type:
+                results_by_type[tag].append(node_id)
 
         print("Detection Results:")
-        for dtype in ["text_input", "button", "link"]:
-            print(f"{dtype}:")
-            nodes = results_by_type[dtype]
-            if nodes:
-                # Extract just the node IDs for a clean list
-                node_ids = [node_id for node_id, tag in nodes]
+        for tag_type in ["input", "button", "link", "select"]:
+            print(f"{tag_type}:")
+            node_ids = results_by_type[tag_type]
+            if node_ids:
                 print(f"  Node IDs: {node_ids}")
                 print(f"  Count: {len(node_ids)}")
             else:

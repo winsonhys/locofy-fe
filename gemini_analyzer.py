@@ -247,25 +247,24 @@ class GeminiAnalyzer:
             results: Dictionary with detection_type as keys and results as values
 
         Returns:
-            Combined dictionary with node_id as keys and detection results as values
+            Combined dictionary with node_id as keys and {"tag": "value"} as values
         """
         combined = {}
 
         for detection_type, detection_results in results.items():
             for node_id, node_info in detection_results.items():
-                # If node already exists, merge the information
-                if node_id in combined:
-                    # Update with new detection type info
-                    combined[node_id].update(node_info)
-                    # Add detection type to the node info
-                    if "detection_types" not in combined[node_id]:
-                        combined[node_id]["detection_types"] = []
-                    combined[node_id]["detection_types"].append(detection_type)
+                # Extract clean node ID from verbose format if present
+                clean_node_id = node_id.split("|")[0] if "|" in node_id else node_id
+
+                # Get the tag from node_info
+                if isinstance(node_info, dict):
+                    tag = node_info.get("tag", "unknown")
                 else:
-                    # Add new node with detection type info
-                    node_info_copy = node_info.copy()
-                    node_info_copy["detection_types"] = [detection_type]
-                    combined[node_id] = node_info_copy
+                    tag = str(node_info)
+
+                # If node already exists, keep the existing tag (first detection wins)
+                if clean_node_id not in combined:
+                    combined[clean_node_id] = {"tag": tag}
 
         return combined
 
@@ -515,21 +514,24 @@ Analyze the nodes above and return your JSON response:"""
                 logger.warning(f"Invalid result structure for {detection_type}")
                 return {}
 
-            # Add detection type to each result
+            # Clean the result by extracting clean node IDs and simplifying the structure
+            cleaned_result = {}
             for node_id, node_info in result.items():
+                # Extract clean node ID from verbose format (e.g., "5:158|INSTANCE|Button Secondary" -> "5:158")
+                clean_node_id = node_id.split("|")[0] if "|" in node_id else node_id
+
                 if isinstance(node_info, dict):
-                    node_info["detection_type"] = detection_type
+                    tag = node_info.get("tag", "unknown")
+                    cleaned_result[clean_node_id] = {"tag": tag}
                 else:
                     # If node_info is not a dict, convert it
-                    result[node_id] = {
-                        "tag": node_info,
-                        "detection_type": detection_type,
-                    }
+                    tag = str(node_info)
+                    cleaned_result[clean_node_id] = {"tag": tag}
 
             logger.info(
-                f"Successfully parsed {len(result)} results for {detection_type}"
+                f"Successfully parsed {len(cleaned_result)} results for {detection_type}"
             )
-            return result
+            return cleaned_result
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON parsing error for {detection_type}: {e}")
@@ -621,16 +623,19 @@ Analyze the nodes above and return your JSON response:"""
                 logger.warning(f"Invalid result structure for combined detection")
                 return {}
 
-            # Simplify the result to only include tag
+            # Simplify the result to only include tag and extract clean node IDs
             simplified_result = {}
             for node_id, node_info in result.items():
+                # Extract clean node ID from verbose format (e.g., "5:158|INSTANCE|Button Secondary" -> "5:158")
+                clean_node_id = node_id.split("|")[0] if "|" in node_id else node_id
+
                 if isinstance(node_info, dict):
                     tag = node_info.get("tag", "unknown")
-                    simplified_result[node_id] = {"tag": tag}
+                    simplified_result[clean_node_id] = {"tag": tag}
                 else:
                     # If node_info is not a dict, convert it
                     tag = str(node_info)
-                    simplified_result[node_id] = {"tag": tag}
+                    simplified_result[clean_node_id] = {"tag": tag}
 
             logger.info(
                 f"Successfully parsed {len(simplified_result)} results from combined detection"
