@@ -34,14 +34,8 @@ async def main():
     print("\n📋 Final Results Summary:")
     print(f"Total classified elements: {len(results)}")
 
-    if results:
-        for node_id, classification in results.items():
-            tag = classification.get("tag", "unknown")
-            print(f"  {node_id}: {tag}")
-    else:
-        print("  No elements classified")
-
     print("\n✅ Example completed!")
+    print(results)
 
 
 if __name__ == "__main__":

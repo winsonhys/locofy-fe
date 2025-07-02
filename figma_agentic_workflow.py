@@ -511,7 +511,11 @@ def extract_results(state: State) -> State:
                                 clean_node_id = (
                                     node_id.split("|")[0] if "|" in node_id else node_id
                                 )
-                                results[clean_node_id] = {"tag": node_info["tag"]}
+                                # Change "link" tags to "a"
+                                tag = node_info["tag"]
+                                if tag == "link":
+                                    tag = "a"
+                                results[clean_node_id] = {"tag": tag}
 
                     if results:
                         break
@@ -1122,7 +1126,7 @@ class FigmaAgenticWorkflow:
                         results_by_tag[tag].append(node_id)
 
                 print("🎯 Detection Results by Element Type:")
-                for tag in ["input", "button", "select", "link"]:
+                for tag in ["input", "button", "select", "a"]:
                     nodes = results_by_tag[tag]
                     print(f"{tag.upper()} Elements:")
                     if nodes:
