@@ -1116,27 +1116,6 @@ class FigmaAgenticWorkflow:
             print(f"⏱️  Analysis completed in {analysis_time:.2f} seconds")
             print(f"📊 Found {len(results)} classified elements")
             print()
-
-            # Display results by type
-            if results:
-                results_by_tag = {"input": [], "button": [], "select": [], "link": []}
-                for node_id, node_info in results.items():
-                    tag = node_info.get("tag", "unknown")
-                    if tag in results_by_tag:
-                        results_by_tag[tag].append(node_id)
-
-                print("🎯 Detection Results by Element Type:")
-                for tag in ["input", "button", "select", "a"]:
-                    nodes = results_by_tag[tag]
-                    print(f"{tag.upper()} Elements:")
-                    if nodes:
-                        print(f"  Node IDs: {nodes}")
-                        print(f"  Count: {len(nodes)}")
-                    else:
-                        print("  Node IDs: []")
-                        print("  Count: 0")
-                    print()
-
             print("✅ Agentic analysis completed!")
 
         return results
