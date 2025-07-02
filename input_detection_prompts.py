@@ -886,19 +886,20 @@ class AgenticDetectionPromptCreator:
 
 2. **Confidence Thresholds**:
    - **High Confidence (70-100)**: Classify immediately with the highest confidence tag
-   - **Medium Confidence (40-70)**: Use the Figma API to fetch detailed properties for better classification
-   - **Low Confidence (0-40)**: Ignore the node (don't include in final results)
+   - **Medium Confidence (30-69)**: Use the Figma API to fetch detailed properties for better classification
+   - **Low Confidence (0-29)**: Ignore the node (don't include in final results)
 
 3. **Tool Usage for Medium Confidence**:
-   - When you encounter nodes with confidence levels between 40-70, use the Figma API endpoint to get detailed properties
+   - When you encounter nodes with confidence levels between 30-69, use the Figma API endpoint to get detailed properties
    - Fetch additional data for these nodes to improve classification accuracy
    - Re-evaluate confidence levels after getting more information
+   - Only include nodes in final results if recalculated confidence is over 70
 
-4. **Final Classification**: Only include nodes in your final results that have high confidence (70+) after analysis.
+4. **Final Classification**: After using API tools to recalculate confidence for medium confidence nodes, only include nodes in your final results that have confidence level over 70.
 
 - **IMPORTANT: Output ONLY the raw JSON object as specified below. Do NOT include any explanations, markdown, or extra text.**
 
-Analyze each node above following this confidence-based process. Use the available tools to get detailed properties for nodes with medium confidence (40-70). Return your analysis in the JSON format specified above. Only include nodes that clearly match one of the detection categories with high confidence. **Do NOT include any explanations, markdown, or text before or after the JSON. Output ONLY the raw JSON object.**
+Analyze each node above following this confidence-based process. Use the available tools to get detailed properties for nodes with medium confidence (30-69). After recalculating confidence with API data, only include nodes that have confidence level over 70 in your final results. **Do NOT include any explanations, markdown, or text before or after the JSON. Output ONLY the raw JSON object.**
 
 ## Output Format:
 ```json
@@ -924,7 +925,7 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
 ## API Access:
 - File key: {file_key}, Start node: {start_node_id}
 - Endpoint: `GET https://api.figma.com/v1/files/{file_key}/nodes?ids=node_id1,node_id2,...`
-- Use API ONLY for medium confidence nodes (40-70%) to get detailed properties
+- Use API ONLY for medium confidence nodes (30-69%) to get detailed properties
 
 ## Detection Rules:
 
@@ -938,10 +939,11 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
 - Names: Button, Submit, Save, Cancel, Primary, Secondary, Add, Delete
 - Standalone icons (VECTOR, INSTANCE) are usually buttons unless in input containers
 - Text with action words: Login, Sign Up, Settings, Profile, Home, About, Contact
+- If a frame or a group contains at least one button, it is not a button
 
 **SELECT**: Dropdown choices
 - Names: Select, Dropdown, Menu, Choose, Filter, Category  
-- Has dropdown arrow indicator (arrow-down, chevron-down, ep:arrow-down)
+- Must have some sort of dropdown arrow indicator (arrow-down, chevron-down, ep:arrow-down)
 - Shows current selection/placeholder
 
 **LINK**: Navigation elements
@@ -949,21 +951,24 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
 - Contains URLs (http://, https://, mailto:, tel:, www., domain.com)
 - Underlined, different color styling
 - Navigation text, NOT action text
+- Matches this regex results in high confidence: \\b(?:https?:\\/\\/)?(?:[a-z0-9-]+\\.)+[a-z]{2,}(?:\\/[^\\s]*)?\\b
 
 ## Critical Rules:
 - Standalone icons = buttons (unless decorative)
 - Generic right icons (Icon/Right, Right Icon, Arrow) ≠ select
 - Links have URLs/navigation text, buttons have action text
 - "Buy tickets" = button, "Visit website" = link
+- **IMPORTANT**: Only return the actual node that should be tagged, not its children. If a parent node contains the interactive element, return the parent node ID, not the child node IDs.
 
 ## Confidence Process:
 1. Assign confidence (0-100) for each classification
 2. High (70-100): Classify immediately
-3. Medium (40-70): Use API for detailed properties, re-evaluate  
-4. Low (0-40): Ignore node
-5. Only include high confidence results (70+)
+3. Medium (30-69): Use API for detailed properties, re-evaluate  
+4. Low (0-29): Ignore node
 
 **Output ONLY raw JSON. No explanations or markdown.**
+
+**Node Selection Rule**: Return only the main container node that should be tagged, not its child elements. For example, if a button frame contains text and icon children, return the button frame node ID, not the individual text or icon node IDs.
 
 ```json
 {{
