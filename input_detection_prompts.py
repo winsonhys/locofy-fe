@@ -583,6 +583,7 @@ Analyze each node above and determine if it represents an input field, button, s
 - Size: Varies but typically compact and clickable
 - Interactive button containers (FRAME, RECTANGLE, INSTANCE) with button functionality
 - Exclude: icons, labels, text elements that are children of buttons
+- **CRITICAL RULE**: If a button node contains another button node, classify the child (innermost) node as the button, not the parent/outer node. Only the most deeply nested button node should be classified as a button.
 
 ### STANDALONE ICONS AS BUTTONS:
 - **CRITICAL RULE**: Standalone icons (VECTOR, INSTANCE, FRAME with icon content) are generally BUTTONS unless they are children of input containers
@@ -956,6 +957,7 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
 - Size: Varies but typically compact and clickable
 - Interactive button containers (FRAME, RECTANGLE, INSTANCE) with button functionality
 - Exclude: icons, labels, text elements that are children of buttons
+- **CRITICAL RULE**: If a button node contains another button node, classify the child (innermost) node as the button, not the parent/outer node. Only the most deeply nested button node should be classified as a button.
 
 ### STANDALONE ICONS AS BUTTONS:
 - **CRITICAL RULE**: Standalone icons (VECTOR, INSTANCE, FRAME with icon content) are generally BUTTONS unless they are children of input containers
@@ -1015,22 +1017,6 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
 - All other right-side icons (including generic names like 'Icon / Right', 'Right Icon', 'Arrow' without 'down') should NOT change an input to a select.
 - Generic right icons like 'Icon / Right', 'Right Icon', 'Arrow' (without 'down') should NOT make an element a select
 - Input elements with generic right icons should remain as inputs, not selects
-
-## URL Patterns (include as links):
-- http://example.com
-- https://example.com
-- ftp://example.com
-- mailto:user@example.com
-- tel:+1234567890
-- www.example.com
-- example.com
-
-## Action Patterns (exclude as links):
-- "Buy tickets" = BUTTON
-- "Submit" = BUTTON
-- "Add to cart" = BUTTON
-- "Delete" = BUTTON
-- "Save" = BUTTON
 
 ## Decision Process with Confidence Assessment:
 1. First, determine if the node is a main container (not a child element)
