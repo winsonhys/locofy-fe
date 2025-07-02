@@ -8,7 +8,7 @@ FIGMA_FILE_KEY = "NnmJQ6LgSUJn08LLXkylSp"
 START_NODE_ID = "1:2"
 
 GEMINI_API_KEY = "secret_token_here"
-GEMINI_MODEL_NAME = "gemini-2.5-pro"
+GEMINI_MODEL_NAME = "gemini-2.5-flash"
 
 # API Settings
 FIGMA_API_BASE_URL = "https://api.figma.com/v1"

@@ -20,6 +20,195 @@ The system uses a LangGraph-based workflow where Gemini AI acts as an intelligen
 3. Make informed decisions about UI element classification
 4. Iteratively refine its analysis
 
+```mermaid
+graph TB
+    %% External Services
+    subgraph "External Services"
+        FIGMA[Figma API]
+        GEMINI[Gemini AI]
+    end
+
+    %% Main Components
+    subgraph "Core System"
+        WORKFLOW[FigmaAgenticWorkflow]
+        DFS[FigmaDFS]
+        ANALYZER[GeminiAnalyzer]
+        PROMPTS[PromptCreator]
+    end
+
+    %% LangGraph Workflow
+    subgraph "LangGraph Workflow"
+        ANALYZER_NODE[Analyzer Node]
+        TOOL_NODE[Tool Node]
+        EXTRACT_NODE[Extract Node]
+        DECISION{Continue?}
+    end
+
+    %% Data Flow
+    subgraph "Data Processing"
+        NODE_DATA[Node Data]
+        FILTERED_DATA[Filtered Data]
+        RESULTS[Analysis Results]
+    end
+
+    %% User Interface
+    subgraph "User Interface"
+        USER[User Input]
+        CONFIG[Config.py]
+        OUTPUT[Results Output]
+    end
+
+    %% Connections - User to System
+    USER --> CONFIG
+    CONFIG --> WORKFLOW
+
+    %% Connections - System to External
+    WORKFLOW --> FIGMA
+    WORKFLOW --> GEMINI
+
+    %% Connections - Core Components
+    WORKFLOW --> DFS
+    WORKFLOW --> ANALYZER
+    WORKFLOW --> PROMPTS
+
+    %% Connections - LangGraph Flow
+    WORKFLOW --> ANALYZER_NODE
+    ANALYZER_NODE --> DECISION
+    DECISION -->|Need More Data| TOOL_NODE
+    DECISION -->|Complete| EXTRACT_NODE
+    TOOL_NODE --> ANALYZER_NODE
+    EXTRACT_NODE --> RESULTS
+
+    %% Connections - Data Flow
+    DFS --> NODE_DATA
+    NODE_DATA --> FILTERED_DATA
+    FILTERED_DATA --> ANALYZER_NODE
+    RESULTS --> OUTPUT
+
+    %% Styling
+    classDef external fill:#e1f5fe
+    classDef core fill:#f3e5f5
+    classDef workflow fill:#e8f5e8
+    classDef data fill:#fff3e0
+    classDef ui fill:#fce4ec
+
+    class FIGMA,GEMINI external
+    class WORKFLOW,DFS,ANALYZER,PROMPTS core
+    class ANALYZER_NODE,TOOL_NODE,EXTRACT_NODE,DECISION workflow
+    class NODE_DATA,FILTERED_DATA,RESULTS data
+    class USER,CONFIG,OUTPUT ui
+```
+
+### Workflow Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant W as Workflow
+    participant D as DFS
+    participant F as Figma API
+    participant A as Analyzer Node
+    participant T as Tool Node
+    participant G as Gemini AI
+    participant E as Extract Node
+
+    U->>W: analyze(file_key, node_id)
+    W->>D: depth_first_search_from_node_id()
+    D->>F: get_node_by_id()
+    F-->>D: node data
+    D-->>W: visited nodes
+    
+    W->>A: analyzer_node(state)
+    A->>G: analyze with initial data
+    G-->>A: analysis response
+    
+    alt Need more data
+        A->>T: tool_node_wrapper()
+        T->>F: get_multiple_figma_nodes()
+        F-->>T: additional node data
+        T-->>A: enhanced data
+        A->>G: re-analyze with new data
+        G-->>A: refined analysis
+    end
+    
+    A->>E: extract_results()
+    E-->>W: structured results
+    W-->>U: classified UI elements
+```
+
+### System Architecture Diagram
+
+```mermaid
+graph LR
+    %% Main System Components
+    subgraph "Figma Agentic Workflow System"
+        subgraph "Data Layer"
+            FIGMA_API[Figma API Client]
+            DFS_TRAVERSAL[DFS Traversal]
+            NODE_FILTERING[Node Filtering]
+        end
+        
+        subgraph "AI Layer"
+            LANGGRAPH[LangGraph Workflow]
+            GEMINI_AI[Gemini AI Model]
+            PROMPT_ENGINE[Prompt Engine]
+        end
+        
+        subgraph "Analysis Layer"
+            ELEMENT_DETECTION[UI Element Detection]
+            CLASSIFICATION[Element Classification]
+            RESULT_FORMATTING[Result Formatting]
+        end
+        
+        subgraph "Tools Layer"
+            FIGMA_TOOLS[Figma API Tools]
+            DYNAMIC_CALLS[Dynamic API Calls]
+            DATA_ENHANCEMENT[Data Enhancement]
+        end
+    end
+    
+    %% External Dependencies
+    subgraph "External Services"
+        FIGMA_SERVICE[Figma Service]
+        GEMINI_SERVICE[Gemini Service]
+    end
+    
+    %% Data Flow
+    FIGMA_API --> DFS_TRAVERSAL
+    DFS_TRAVERSAL --> NODE_FILTERING
+    NODE_FILTERING --> LANGGRAPH
+    
+    LANGGRAPH --> GEMINI_AI
+    GEMINI_AI --> PROMPT_ENGINE
+    PROMPT_ENGINE --> ELEMENT_DETECTION
+    
+    ELEMENT_DETECTION --> CLASSIFICATION
+    CLASSIFICATION --> RESULT_FORMATTING
+    
+    %% Tool Integration
+    LANGGRAPH --> FIGMA_TOOLS
+    FIGMA_TOOLS --> DYNAMIC_CALLS
+    DYNAMIC_CALLS --> DATA_ENHANCEMENT
+    DATA_ENHANCEMENT --> GEMINI_AI
+    
+    %% External Connections
+    FIGMA_API --> FIGMA_SERVICE
+    GEMINI_AI --> GEMINI_SERVICE
+    
+    %% Styling
+    classDef dataLayer fill:#e3f2fd
+    classDef aiLayer fill:#f3e5f5
+    classDef analysisLayer fill:#e8f5e8
+    classDef toolsLayer fill:#fff3e0
+    classDef external fill:#ffebee
+    
+    class FIGMA_API,DFS_TRAVERSAL,NODE_FILTERING dataLayer
+    class LANGGRAPH,GEMINI_AI,PROMPT_ENGINE aiLayer
+    class ELEMENT_DETECTION,CLASSIFICATION,RESULT_FORMATTING analysisLayer
+    class FIGMA_TOOLS,DYNAMIC_CALLS,DATA_ENHANCEMENT toolsLayer
+    class FIGMA_SERVICE,GEMINI_SERVICE external
+```
+
 ## 📋 Workflow Steps
 
 ### 1. **Data Preparation Phase**
@@ -162,7 +351,3 @@ The system can identify:
 - **Buttons**: Primary buttons, icon buttons, action buttons
 - **Links**: Clickable text links, navigation elements
 - **Select Elements**: Dropdown menus, selection controls
-
-## 🔒 Security
-
-This repository has been cleaned of all sensitive data including API keys and tokens. The git history has been rewritten to remove any traces of credentials. Always use environment variables or secure credential management in production environments. 
