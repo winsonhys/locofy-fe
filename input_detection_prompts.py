@@ -557,8 +557,8 @@ Analyze each node above and determine if it represents an input field, button, s
 - The starting node ID is: {START_NODE_ID}
 
 ## Available Figma API Endpoints (for you to use):
-- `GET https://api.figma.com/v1/files/{file_key}`: Fetch the full file structure.
-- `GET https://api.figma.com/v1/files/{file_key}/nodes?ids={node_id}`: Fetch all properties for a specific node (including children, type, name, etc).
+- `GET https://api.figma.com/v1/files/{FIGMA_FILE_KEY}`: Fetch the full file structure.
+- `GET https://api.figma.com/v1/files/{FIGMA_FILE_KEY}/nodes?ids={START_NODE_ID}`: Fetch all properties for a specific node (including children, type, name, etc).
 - You may use these endpoints to fetch any node's data as needed for your analysis.
 
 ## Detection Guidelines:
@@ -919,123 +919,52 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
 
     def _get_base_prompt(self, file_key: str, start_node_id: str) -> str:
         """Get the comprehensive base prompt template for agentic detection"""
-        return f"""You are an expert UI analyst specializing in identifying interactive elements from Figma design nodes. Your task is to analyze each node and determine if it represents an input field, button, select/dropdown, or link.
+        return f"""You are a UI analyst identifying interactive elements from Figma nodes. Classify each node as: input, button, select, or link.
 
-## Agentic Instructions:
-- You do NOT have access to a Figma access token.
-- You have already been provided with the full node structure and basic properties for all nodes in the initial prompt.
-- You CAN call the Figma API endpoint below to fetch additional properties for multiple nodes at once if you need more information to classify a node.
-- **CRITICAL**: Use the API specifically for nodes with medium confidence levels (40-70) to improve classification accuracy.
-- **DO NOT** make API calls for nodes with high confidence (70+) or low confidence (0-40).
-- The Figma file key is: {file_key}
-- The starting node ID is: {start_node_id}
+## API Access:
+- File key: {file_key}, Start node: {start_node_id}
+- Endpoint: `GET https://api.figma.com/v1/files/{file_key}/nodes?ids=node_id1,node_id2,...`
+- Use API ONLY for medium confidence nodes (40-70%) to get detailed properties
 
-## Available Figma API Endpoint (for you to use):
-- `GET https://api.figma.com/v1/files/{file_key}/nodes?ids=node_id1,node_id2,...`: Fetch detailed properties for multiple nodes at once (including children, type, name, styling, etc).
-- **USE THIS ENDPOINT ONLY** for nodes with medium confidence levels (40-70) to improve classification accuracy.
-- **DO NOT** use this endpoint for nodes with high confidence (70+) or low confidence (0-40).
+## Detection Rules:
 
-## Detection Guidelines:
+**INPUT**: Text entry fields
+- Names: Input, Search Bar, Text Field, Form Field, Email, Password
+- Shape: Rectangular, wider than tall
+- May have left icons (search, user, email)
+- NOT select unless: named Select/Dropdown/Menu OR has dropdown arrow (arrow-down, chevron-down)
 
-### TEXT INPUT ELEMENTS:
-- Purpose: Allow users to enter text data
-- Shape: Typically rectangular and wider than tall (to accommodate text input)
-- Content: May contain placeholder text, labels, or help text
-- Naming: Often named 'Input', 'Search Bar', 'Text Field', 'Form Field', 'Email', 'Password', 'Search'
-- Structure: Usually contains text elements, labels, and sometimes icons
-- Styling: May have borders, background fills, and rounded corners
-- Size: Generally longer horizontally to provide space for user typing
-- Main input containers (FRAME, RECTANGLE, INSTANCE) designed for text entry
-- Exclude: icons, buttons, labels, help text that are children of input containers
+**BUTTON**: Action triggers 
+- Names: Button, Submit, Save, Cancel, Primary, Secondary, Add, Delete
+- Standalone icons (VECTOR, INSTANCE) are usually buttons unless in input containers
+- Text with action words: Login, Sign Up, Settings, Profile, Home, About, Contact
 
-### BUTTON ELEMENTS:
-- Purpose: Trigger actions when clicked
-- Shape: Can be rectangular, rounded, or pill-shaped
-- Content: Usually contains text labels, icons, or both
-- Naming: Often named 'Button', 'Submit', 'Save', 'Cancel', 'Primary', 'Secondary', 'IconButton', 'Add', 'Delete'
-- Styling: May have background fills, borders, and hover states
-- Size: Varies but typically compact and clickable
-- Interactive button containers (FRAME, RECTANGLE, INSTANCE) with button functionality
-- Exclude: icons, labels, text elements that are children of buttons
-- **CRITICAL RULE**: If a button node contains another button node, classify the child (innermost) node as the button, not the parent/outer node. Only the most deeply nested button node should be classified as a button.
+**SELECT**: Dropdown choices
+- Names: Select, Dropdown, Menu, Choose, Filter, Category  
+- Has dropdown arrow indicator (arrow-down, chevron-down, ep:arrow-down)
+- Shows current selection/placeholder
 
-### STANDALONE ICONS AS BUTTONS:
-- **CRITICAL RULE**: Standalone icons (VECTOR, INSTANCE, FRAME with icon content) are generally BUTTONS unless they are children of input containers
-- Icons that appear to be clickable/interactive should be classified as buttons
-- Common standalone icon buttons: search icons, menu icons, close icons, settings icons, profile icons
-- Only exclude icons that are clearly decorative or part of input fields
-- If an icon appears to serve an interactive purpose, classify it as a button
+**LINK**: Navigation elements
+- Names: Link, URL, Website, Visit, Go to, More, Read More, Learn More
+- Contains URLs (http://, https://, mailto:, tel:, www., domain.com)
+- Underlined, different color styling
+- Navigation text, NOT action text
 
-### SELECT/DROPDOWN ELEMENTS:
-- Purpose: Allow users to choose from a list of options
-- Shape: Typically rectangular with a dropdown arrow
-- Content: Shows selected value and has a dropdown indicator
-- Naming: Often named 'Select', 'Dropdown', 'Menu', 'Choose', 'Filter', 'Category'
-- Structure: Contains text + dropdown icon on the right
-- Behavior: Opens a list of options when clicked
-- Dropdown/select containers with selection functionality
-- Contains text + dropdown indicator (arrows, chevrons, down arrow)
-- May show current selection or placeholder text
-- Exclude: regular action buttons without dropdown indicators
+## Critical Rules:
+- Standalone icons = buttons (unless decorative)
+- Generic right icons (Icon/Right, Right Icon, Arrow) ≠ select
+- Links have URLs/navigation text, buttons have action text
+- "Buy tickets" = button, "Visit website" = link
 
-### LINK ELEMENTS:
-- Purpose: Navigate to external URLs or internal pages when clicked
-- Content: Contains actual URL text (starting with http://, https://, ftp://, mailto:, tel:, etc.). Any text that fulfils rfc1738 and is not a child of a button or select is a link
-- Naming: Often named "Link", "URL", "Website", "External Link", "Navigation", "Visit", "Go to", "More", "Read More", "Learn More"
-- Structure: Usually contains text elements with URL content
-- Styling: ALWAYS underlined and has different color from surrounding text (typically blue, purple, or brand colors)
-- Visual Indicators: May have hover states, different colors to indicate tappability
-- Behavior: Designed for navigation, not form submission or data entry
-- Text Content: Contains actual URLs, domain names, or explicit link text like "Visit website", "Go to page"
-- May contain icons (external link, arrow)
-- Exclude: regular text that's not meant to be clicked
+## Confidence Process:
+1. Assign confidence (0-100) for each classification
+2. High (70-100): Classify immediately
+3. Medium (40-70): Use API for detailed properties, re-evaluate  
+4. Low (0-40): Ignore node
+5. Only include high confidence results (70+)
 
-## CRITICAL: Links vs Buttons
-- Links contain ACTUAL URLs or explicit navigation text
-- Buttons contain ACTION text (Submit, Buy, Add, Delete, etc.) - these are NOT links
-- "Buy tickets" = BUTTON (action), not a link
-- "Visit website" = LINK (navigation)
-- "Submit" = BUTTON (action), not a link
-- "http://example.com" = LINK (actual URL)
-- "example.com" = LINK (domain name)
+**Output ONLY raw JSON. No explanations or markdown.**
 
-## Text as Buttons:
-- Text elements in headers/footers that look like call-to-action
-- Text that describes actions you can do when clicked (e.g., "Login", "Sign Up", "Settings", "Profile")
-- Tab selection text (e.g., "Home", "About", "Contact", "Products")
-- Section selection text (e.g., "All", "Recent", "Popular", "Favorites")
-- Navigation text that implies action (e.g., "Next", "Previous", "Back", "Continue")
-- Text that appears clickable and action-oriented
-- Text elements that contains words that appears to be clickable and action-oriented
-
-## IMPORTANT - Right Icon Classification:
-- Inputs may have a left icon (e.g., search, user, email, etc.)—this is common and does NOT affect input classification.
-- Inputs do NOT require a right icon.
-- Only classify as select if:
-  1. The node is explicitly named 'Select', 'Dropdown', 'Menu', 'Choose', 'Filter', OR
-  2. The right icon is clearly a dropdown indicator (named like 'arrow-down', 'chevron-down', 'ep:arrow-down').
-- All other right-side icons (including generic names like 'Icon / Right', 'Right Icon', 'Arrow' without 'down') should NOT change an input to a select.
-- Generic right icons like 'Icon / Right', 'Right Icon', 'Arrow' (without 'down') should NOT make an element a select
-- Input elements with generic right icons should remain as inputs, not selects
-
-## Decision Process with Confidence Assessment:
-1. First, determine if the node is a main container (not a child element)
-2. Analyze the node's name, type, and context
-3. Consider the node's styling and visual characteristics
-4. Look at child elements to understand the node's purpose
-5. **Pay special attention to standalone icons - they are usually buttons unless part of an input**
-6. **Assign confidence levels (0-100) for each possible classification:**
-   - Evaluate how well the node matches each category
-   - Consider naming patterns, structure, styling, and context
-   - Higher confidence for clear matches, lower for ambiguous cases
-7. **Apply confidence thresholds:**
-   - **High (70-100)**: Classify immediately with highest confidence tag
-   - **Medium (40-70)**: Use Figma API to get detailed properties, then re-evaluate
-   - **Low (0-40)**: Ignore the node (don't include in results)
-8. **For medium confidence nodes:** Fetch detailed properties and re-assess confidence levels
-9. **Final classification:** Only include nodes with high confidence (70+) after analysis
-
-## Output Format:
 ```json
 {{
   "<node_id>": {{"tag": "<detected_tag>"}},
@@ -1043,7 +972,7 @@ Where <detected_tag> is one of: "input", "button", "select", "link"
 }}
 ```
 
-Where <detected_tag> is one of: "input", "button", "select", "link"
+Where <detected_tag> is: input, button, select, link
 
 ## Nodes to Analyze:"""
 
